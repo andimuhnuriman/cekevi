@@ -1,0 +1,2770 @@
+var rows = [];
+var left_headers = [];
+var right_headers = [];
+var stickies = [];
+var column_formats = [];
+var collapse_agg_fields = [];
+var group_collapse_agg_fields = [];
+var group_agg_fields = {};
+var distinct_fields = [];
+var data_height = 0;
+
+var report_id = "";
+var timeout_in_sec = 0;
+var info_report = "";
+var page = 1;
+var pagesize = 0;
+var max_page;
+var data_count;
+var sort = "";
+var filter = {};
+
+// etc
+var default_pagesize = 50;
+var saved_input = {};
+var saved_collapsed = {};
+var saved_waiting_sum = [];
+var saved_ready_to_sum = [];
+var saved_waiting_avg = [];
+var saved_ready_to_avg = [];
+var saved_waiting_max = [];
+var saved_ready_to_max = [];
+var saved_waiting_min = [];
+var saved_ready_to_min = [];
+var saved_group_collapse = [];
+var saved_group_by_value = []; // for func>
+var parameters = [];
+var saved_sum_group_by = {};
+var saved_max_group_by = {};
+var saved_avg_group_by = {};
+var saved_waiting_func = []; // for func>
+var saved_waiting_func_group = []; // for func>
+
+$(document).ready(function() {
+	$('#dmc-8000').addClass("chosen");
+	$('#divPageTitle').html("LAPORAN");
+	$('#divContentContainer').append($('#divPageContainer').show());
+	
+	// -- Put Code Here
+	if (!_isDashboard) {
+		
+		// add tag
+		var vpTag = document.createElement('meta');
+		vpTag.id = "viewport";
+		vpTag.name = "viewport";
+		vpTag.content = "width=1366, minimum-scale=1.0, maximum-scale=5.0";
+		document.getElementsByTagName('head')[0].appendChild(vpTag);
+	}
+
+	$('#selectLaporan').width(400).chosen({
+		no_results_text: "KATA TIDAK DITEMUKAN",
+	});
+	$('#selectLaporan_chosen .chosen-focus-input').focus();
+	
+	$('#selectLaporan').change(function() {
+		report_id = $(this).val();
+		if (report_id != "") {
+			
+			// get params
+			var data = {};
+			data.act = "report";
+			data.params = {};
+			data.params.sub_act = "get_params";
+			data.params.report_id = report_id;
+			ajaxPost(data, function(resp) { 
+				result = JSON.parse(resp);
+				if (result['status'] == "00000") {
+					parameters = result['return']['parameters'];
+					timeout_in_sec = result['return']['timeout_in_sec'];
+					info_report = result['return']['info_report'] === null ? "" : result['return']['info_report'];
+					
+					refreshTableInput();
+					
+					$('#btnShow').show();
+					$('#btnExport').show();
+					$('#btnReset').hide();
+					setTimeout(function() {
+						$('#btnShow').focus();
+					});
+				} else {
+					showInformation("[" + result['status'] + "] KESALAHAN", result["message"], "OK", "", "", function() {
+						$('#selectLaporan_chosen .chosen-focus-input').focus();
+					});
+					closeTableInput();
+				}
+			}, function(resp) {
+				$('#selectLaporan').val("").trigger("chosen:updated");
+				$('#selectLaporan_chosen .chosen-focus-input').focus();
+				closeTableInput();
+			});
+		} else {
+			closeTableInput();
+		}
+	});
+	
+	$('#btnCloseSelect').click(function() {
+		$('#selectLaporan').prop("disabled", false).val("").trigger("chosen:updated");
+		$('#tblReport').html("");
+		$('#divSetting').hide();
+		closeTableInput();
+		
+		report_id = "";
+		pagesize = 0;
+		$('#btnShow, #btnReset, #btnExport').hide();
+		$(this).hide();
+	});
+	
+	$('#btnCollapse').click(function() {
+		if ($('#tblInput').is(":visible")) {
+			closeTableInput();
+		} else {
+			openTableInput();
+		}
+	});
+	
+	$('#btnShow').click(function() {
+		report_id = $('#selectLaporan').val();
+		if (report_id != "") {
+			
+			// check jika ada select yang belum ada value
+			var cont = true;
+			$('.input.select').each(function() {
+				var obj = $(this);
+				var value = obj.val();
+				var name = obj.data("name");
+				if (value == "") {
+					cont = false;
+					showInformation("KESALAHAN", name + " HARUS DIPILIH", "OK", "", "", function () { obj.find("+.chosen-container .chosen-focus-input").focus(); });
+					return false;
+				}
+			});
+			
+			if (cont) {
+				
+				// check jika ada select_multi yang belum ada value
+				$('.input.select_multi').each(function() {
+					var obj = $(this);
+					var value = obj.val();
+					if (value == null) value = [];
+					var name = obj.data("name");
+					if (value.length == 0) {
+						cont = false;
+						showInformation("KESALAHAN", name + " HARUS DIPILIH", "OK", "", "", function () { });
+						return false;
+					}
+				});
+			}
+			
+			if (cont) getFreshDataReport();
+		} else {
+			showInformation("KESALAHAN", "LAPORAN HARUS DIPILIH", "OK", "", "", function() { $('#selectLaporan_chosen .chosen-focus-input').focus(); });
+		}
+	});
+	
+	$('#btnReset').click(function() {
+		$('#tblInput .input').each(function() {
+			var id = $(this).prop("id");
+			
+			if (saved_input[id].constructor === Array) {
+				var values = [];
+				for (var i=0; i<saved_input[id].length; i++) {
+					values.push(saved_input[id][i]);
+				}
+				$(this).val(values).removeClass("changed_value");
+			} else {
+				$(this).val(saved_input[id]).removeClass("changed_value");
+			}
+			if ($(this).next().hasClass("chosen-container")) {
+				$(this).trigger("chosen:updated");
+				$(this).trigger("change");
+			}
+		});
+		$(this).prop("disabled", true);
+	});
+	
+	$('#selectPagesize').change(function() {
+		var oldvalue = pagesize;
+		pagesize = $(this).val();
+		getDataReport(function() {
+			pagesize = oldvalue;
+			$('#selectPagesize').val(oldvalue);
+		});
+	});
+	
+	$('#selectPage').change(function() {
+		var oldvalue = page;
+		page = $(this).val();
+		getDataReport(function() {
+			page = oldvalue;
+			$('#selectPage').val(page);
+		});
+	});
+	
+	$('#btnFirst').click(function() {
+		var oldvalue = page;
+		page = 1;
+		getDataReport(function() {
+			page = oldvalue;
+		});
+	});
+	
+	$('#btnNext').click(function() {
+		var oldvalue = page;
+		page ++;
+		if (page > max_page) page = max_page;
+		getDataReport(function() {
+			page = oldvalue;
+		});
+	});
+	
+	$('#btnPrev').click(function() {
+		var oldvalue = page;
+		page --;
+		if (page < 1) page = 1;
+		getDataReport(function() {
+			page = oldvalue;
+		});
+	});
+	
+	$('#btnLast').click(function() {
+		var oldvalue = page;
+		page = max_page;
+		getDataReport(function() {
+			page = oldvalue;
+		});
+	});
+	
+	$('#btnExport').click(function() {
+		if (report_id != "") {
+			var inputs = {};
+			var showInputs = {};
+			$('#tblInput .input').each(function() {
+				var id = $(this).prop("id");
+				var value = $(this).val();
+				var show_value = value;
+				if ($(this).hasClass("datepicker")) {
+					var format = $(this).data("format");
+			
+					if (!$(this).hasClass("monthpicker")) {
+						if (format == "Ymd") value = value.substr(6,4) + value.substr(3,2) + value.substr(0,2);
+						if (format == "Y-m-d") value = value.substr(6,4) + "-" + value.substr(3,2) + "-" + value.substr(0,2);
+					} else {
+						var months = ["JANUARI", "FEBRUARI", "MARET", "APRIL", "MEI", "JUNI", "JULI", "AGUSTUS", "SEPTEMBER", "OKTOBER", "NOVEMBER", "DESEMBER"];
+						var expl = value.split(" ");
+						if (months.indexOf(expl[0]) >= 0) {
+							if (format == "Ym") value = expl[1] + (months.indexOf(expl[0])+1 < 10 ? "0" + (months.indexOf(expl[0])+1) : months.indexOf(expl[0])+1);
+							if (format == "Y-m") value = expl[1] + "-" + (months.indexOf(expl[0])+1 < 10 ? "0" + (months.indexOf(expl[0])+1) : months.indexOf(expl[0])+1);
+						}
+					}
+				}
+				if ($(this).hasClass("numeric")) {
+					value = value.replace(/\./g,'')*1;
+					show_value = value + "";
+				}
+				if ($(this).hasClass("select") || $(this).hasClass("select_year")) {
+					show_value = $(this).find('option:selected').text();
+				}
+				if ($(this).hasClass("select_multi")) {
+					if (value == null) value = [];
+					
+					// jika INIALLMULTISELECT
+					if (value.indexOf("INIALLMULTISELECT") >= 0) {
+						value = [];
+						show_value = "SEMUA";
+						$(this).find('option').each(function() {
+							var val = $(this).val();
+							if (val != "INIALLMULTISELECT") value.push(val);
+						});
+					} else {
+						new_value = [];
+						$(this).find('option:selected').each(function() {
+							var val = $(this).text();
+							new_value.push(val);
+						});
+						show_value = new_value.join(",");
+					}
+				}
+				
+				inputs[id] = value;
+				showInputs[id] = show_value;
+			});
+			
+			showLoader();
+			var url = "dml/export_report.php";
+			var data = {};
+			data['report_id'] = report_id;
+			data['sort'] = sort;
+			data['filter'] = JSON.stringify(filter);
+			data['inputs'] = JSON.stringify(inputs);
+			data['showinputs'] = JSON.stringify(showInputs);
+			$.ajax({
+				type: "POST",
+				url: url,
+				data: data,
+				timeout: timeout_in_sec*2*1000,
+			}).done(function(resp){
+				hideLoader();
+				
+				var result = resp;
+				try {
+					a = JSON.parse(result);
+					if (a['status'] == "29901" || a['status'] == "29905") {
+						showInformation("KESALAHAN", a['message'], "OK", "", "", function() {
+							gotoPage("logout.php");
+						});
+					} else {
+						if (a['status'] == "00000") {
+							location.href = "generated/" + a['return']['filename'];
+						} else {
+							showInformation("[" + a['status'] + "] KESALAHAN", a["message"], "OK");
+						}
+					}
+				} catch(e) {
+					console.log(e);
+					showInformation("KESALAHAN", "TERJADI MASALAH TEKNIS, HUBUNGI ADMINISTRATOR", "OK");
+				}
+			})
+			.fail(function(resp){
+				console.log(resp);
+				hideLoader();
+				showInformation("KESALAHAN", "TERJADI MASALAH SAAT PENGIRIMAN DATA<br>COBALAH BEBERAPA SAAT LAGI", "OK");
+			});
+		} else {
+			showInformation("KESALAHAN", "LAPORAN HARUS DIPILIH", "OK", "", "", function() { $('#selectLaporan_chosen .chosen-focus-input').focus(); });
+		}
+		
+		return false;
+	});
+	
+	$('#divInfoReport').hover(function() {
+		if (info_report.length > 0) $('#divInfoReport>textarea').html(info_report).show();
+	}, function() {
+		$('#divInfoReport>textarea').hide();
+	});
+	
+	// click navicon
+	navicon_onload = function() {
+		refreshSizeMainReport('#tblReport');
+	};
+	
+	// resize
+	resize_onload = function() {
+		refreshSizeMainReport('#tblReport');
+	};
+});
+
+function openTableInput() {
+	var obj = $('#tblInput');
+	if (obj.find('.param').size() > 0) {
+		if (!obj.is(":visible")) {
+			$('#btnCollapse').removeClass("rotate");
+			obj.show();
+			$('.buttonContainer').show();
+			refreshSizeMainReport('#tblReport');
+		}
+		
+		$('#divInfoReport').show();
+	}
+}
+
+function closeTableInput() {
+	var obj = $('#tblInput');
+	if (obj.find('.param').size() > 0) {
+		if (obj.is(":visible")) {
+			$('#btnCollapse').addClass("rotate");
+			obj.hide();
+			$('.buttonContainer').hide();
+			refreshSizeMainReport('#tblReport');
+		}
+		
+		$('#divInfoReport').hide();
+	}
+	if ($('#selectLaporan').val() == "") {
+		$('#tblInput').html("");
+	}
+	
+	if (!$('#selectLaporan').is(":disabled")) $('#selectLaporan_chosen .chosen-focus-input').focus();
+}
+
+function getFreshDataReport() {
+	page = 1;
+	sort = "";
+	filter = {};
+	getDataReport();
+}
+
+function getDataReport(failFunc) {
+	failFunc = typeof failFunc !== 'undefined' ? failFunc : function() {};
+	
+	var data = {};
+	data.act = "report";
+	data.params = {};
+	data.params.sub_act = "show";
+	data.params.report_id = report_id;
+	data.params.page = page;
+	if (pagesize > 0) data.params.pagesize = pagesize;
+	data.params.sort = sort;
+	data.params.filter = filter;
+	data.params.inputs = {};
+	$('#tblInput .input').each(function() {
+		var id = $(this).prop("id");
+		var value = $(this).val();
+		if ($(this).hasClass("select_multi") && value == null) value = [];
+		
+		// save to saved_input
+		if (value.constructor === Array) {
+			saved_input[id] = [];
+			for (var i=0; i<value.length; i++) {
+				saved_input[id].push(value[i]);
+			}
+		} else {
+			saved_input[id] = value;
+		}
+		
+		if ($(this).hasClass("datepicker")) {
+			var format = $(this).data("format");
+			
+			if (!$(this).hasClass("monthpicker")) {
+				if (format == "Ymd") value = value.substr(6,4) + value.substr(3,2) + value.substr(0,2);
+				if (format == "Y-m-d") value = value.substr(6,4) + "-" + value.substr(3,2) + "-" + value.substr(0,2);
+			} else {
+				var months = ["JANUARI", "FEBRUARI", "MARET", "APRIL", "MEI", "JUNI", "JULI", "AGUSTUS", "SEPTEMBER", "OKTOBER", "NOVEMBER", "DESEMBER"];
+				var expl = value.split(" ");
+				if (months.indexOf(expl[0]) >= 0) {
+					if (format == "Ym") value = expl[1] + (months.indexOf(expl[0])+1 < 10 ? "0" + (months.indexOf(expl[0])+1) : months.indexOf(expl[0])+1);
+					if (format == "Y-m") value = expl[1] + "-" + (months.indexOf(expl[0])+1 < 10 ? "0" + (months.indexOf(expl[0])+1) : months.indexOf(expl[0])+1);
+				}
+			}
+		}
+		if ($(this).hasClass("numeric")) {
+			value = value.replace(/\./g,'')*1;
+		}
+		if ($(this).hasClass("select_multi")) {
+			
+			// jika INIALLMULTISELECT
+			if (value.indexOf("INIALLMULTISELECT") >= 0) {
+				value = [];
+				$(this).find('option').each(function() {
+					var val = $(this).val();
+					if (val != "INIALLMULTISELECT") value.push(val);
+				});
+			}
+		}
+		
+		// sanitize value for ajax
+		if (value.constructor === Array) {
+			for (var i=0; i<value.length; i++) {
+				if (typeof value[i] == "string") value[i] = encodeURIComponent(addslashes(value[i]));
+			}
+		} else {
+			if (typeof value[i] == "string") value = encodeURIComponent(addslashes(value));
+		}
+		
+		data.params.inputs[id] = value;
+	});
+	
+	ajaxPost(data, function(resp) { 
+		result = JSON.parse(resp);
+		if (result['status'] == "00000") {
+			page = result['return']['page'];
+			max_page = result['return']['max_page'];
+			pagesize = result['return']['pagesize'];
+			data_count = result['return']['data_count'];
+			left_headers = result['return']['left_headers'];
+			right_headers = result['return']['right_headers'];
+			stickies = result['return']['stickies'];
+			rows = result['return']['data'];
+			
+			// other parameter
+			column_formats = result['return']['column_formats'];
+			collapse_agg_fields = result['return']['collapse_agg_fields'];
+			group_collapse_agg_fields = result['return']['group_collapse_agg_fields'];
+			group_agg_fields = result['return']['group_agg_fields'];
+			distinct_fields = result['return']['distinct_fields'];
+			data_height = result['return']['data_height'];
+			filter = result['return']['filter'];
+			if (filter.constructor === Array) filter = {};
+			
+			// re-init
+			saved_waiting_sum = [];
+			saved_ready_to_sum = [];
+			saved_waiting_avg = [];
+			saved_ready_to_avg = [];
+			saved_waiting_max = [];
+			saved_ready_to_max = [];
+			saved_waiting_min = [];
+			saved_ready_to_min = [];
+			saved_group_collapse = [];
+			saved_group_by_value = [];
+			saved_waiting_func = [];
+			saved_waiting_func_group = [];
+			_clickForSort = false;
+			_clickForFilter = false;
+			
+			generateReport();
+			
+			// lock selector
+			$('#selectLaporan').prop("disabled", true).trigger("chosen:updated");
+			$('#btnCloseSelect').show();
+			$('#btnReset').show();
+			
+			// save input
+			$('#tblInput .input').removeClass("changed_value");
+			checkButtonReset();
+			closeTableInput();
+		} else {
+			showInformation("[" + result['status'] + "] KESALAHAN", result["message"], "OK", "", "", failFunc);
+		}
+	}, failFunc, true, timeout_in_sec);
+}
+
+function checkButtonReset() {
+	var found = false;
+	$('#tblInput .input').each(function() {
+		var id = $(this).prop("id");
+		var value = $(this).val();
+		if ($(this).hasClass("select_multi") && value == null) value = [];
+		
+		if (saved_input[id].constructor === Array && value.constructor === Array) {
+			if (saved_input[id].length == value.length) {
+				for (var i=0; i<saved_input[id].length; i++) {
+					if (saved_input[id][i] != value[i]) {
+						found = true;
+						return false;
+					}
+				}
+			} else {
+				found = true;
+				return false;
+			}
+		} else {
+			if (saved_input[id] != value) {
+				found = true;
+				return false;
+			}
+		}
+	});
+	
+	if (found) {
+		$('#btnReset').prop("disabled", false);
+	} else {
+		$('#btnReset').prop("disabled", true);
+	}
+}
+
+function refreshTableInput() {
+	var content = "";
+	if (parameters.length > 0) {
+		var line_helper = 0;
+		for (var i=0; i<parameters.length; i++) {
+			if (line_helper % 2 == 0) content += "<tr>";
+			
+			if (parameters[i]['type'] == 'skip') {
+				content += "<td class='param'></td><td class='value'></td>";
+			} else {
+				content += "<td class='param'>" + parameters[i]['name'] + " :</td><td colspan=" + (parameters[i]['type'] == "foreign_multi" || parameters[i]['type'] == "foreign_multi_affected" ? 3 : 1) + " class='value'>";
+				if (parameters[i]['type'] == 'date') {
+					content += "<input id='inp_" + parameters[i]['params'] + "' data-format='" + parameters[i]['value2'] + "' type='text' size=8 class='input datepicker' value='";
+					var dt = new Date();
+					var m = dt.getMonth();
+					var y = dt.getFullYear();
+					if (parameters[i]['value'] == "-1 month") {
+						dt.setDate(dt.getMonth() - 1);
+						if (dt.getMonth() == m) dt.setDate(0);
+						dt.setHours(0, 0, 0);
+						dt.setMilliseconds(0);
+					} else if (parameters[i]['value'] == "yesterday") {
+						dt.setDate(dt.getDate() - 1);
+					} else if (parameters[i]['value'] == "bom") {
+						dt = new Date(y, m, 1);
+					} else if (parameters[i]['value'] == "eom") {
+						dt = new Date(y, m + 1, 0);
+					}
+					content += (dt.getDate() < 10 ? "0" + dt.getDate() : dt.getDate()) + "-" + (dt.getMonth()+1 < 10 ? "0" + (dt.getMonth()+1) : dt.getMonth()+1) + "-" + dt.getFullYear();
+					content += "'>";
+				} else if (parameters[i]['type'] == 'month') {
+					content += "<input id='inp_" + parameters[i]['params'] + "' data-format='" + parameters[i]['value2'] + "' type='text' size=12 class='input datepicker monthpicker' value='"
+					var dt = new Date();
+					var m = dt.getMonth();
+					var y = dt.getFullYear();
+					if (parameters[i]['value'] == "-1 month") {
+						dt.setDate(dt.getMonth() - 1);
+						if (dt.getMonth() == m) dt.setDate(0);
+						dt.setHours(0, 0, 0);
+						dt.setMilliseconds(0);
+					} else if (parameters[i]['value'] == "boy") {
+						dt = new Date(y, 0, 1);
+					}
+					content += getMonthsName(dt.getMonth()+1, false) + " " + dt.getFullYear();
+					content += "'>";
+				} else if (parameters[i]['type'] == "year") {
+					content += "<select id='inp_" + parameters[i]['params'] + "' class='input select_year'>";
+					var dt = new Date();
+					var y1 = dt.getFullYear();
+					var y2 = dt.getFullYear();
+					if (parameters[i]['value'].indexOf("..") >= 0) {
+						var temp = parameters[i]['value'].split("..");
+						if (typeof temp[0] !== "undefined" && temp[0].substr(0,5) == "today") {
+							y1 += (temp[0].substr(5)*1);
+						}
+						if (typeof temp[1] !== "undefined" && temp[1].substr(0,5) == "today") {
+							y2 += (temp[1].substr(5)*1);
+						}
+					}
+					var default_year = dt.getFullYear();
+					if (parameters[i]['value2'].substr(0,5) == "today") {
+						default_year += parameters[i]['value2'].substr(5)*1;
+					}
+					for (var j=y1; j<=y2; j++) {
+						content += "<option value='" + j + "' " + (j == default_year ? "selected" : "") + ">" + j + "</option>";
+					}
+					content += "</select>";
+				} else if (parameters[i]['type'] == 'string') {
+					content += "<input id='inp_" + parameters[i]['params'] + "' type='text' class='input string' value='" + parameters[i]['value'] + "'>";
+				} else if (parameters[i]['type'] == 'numeric') {
+					content += "<input id='inp_" + parameters[i]['params'] + "' type='text' class='input numeric' size=10 onkeyup='onkeyFormat(this)' value='" + formatCur(parameters[i]['value']) + "'>";
+				} else if (parameters[i]['type'] == 'foreign') {
+					if (parameters[i]['data'].length > 0) {
+						content += "<select id='inp_" + parameters[i]['params'] + "' class='input select' data-affected-params='" + parameters[i]['affected_params_list'] + "' data-name='" + escapeHtml(parameters[i]['name']) + "'>";
+						if (parameters[i]['affected_params_list'] != "") content += "<option value='' selected>-- PILIH " + parameters[i]['name'] + "</option>";
+						for (var j=0; j<parameters[i]['data'].length; j++) {
+							var data = parameters[i]['data'][j];
+							content += "<option value='" + data['id'] + "'>" + data['value'] + "</option>";
+						}
+						content += "</select>";
+					}
+				} else if (parameters[i]['type'] == 'foreign_multi') {
+					if (parameters[i]['affected_params_list'] == "") {
+						content += "<select id='inp_" + parameters[i]['params'] + "' class='input select_multi has_all' multiple>";
+						content +=	"<option value='INIALLMULTISELECT' selected>SEMUA</option>";
+					} else {
+						// jika ada affect ke elemen laen
+						content += "<select id='inp_" + parameters[i]['params'] + "' class='input select_multi' multiple data-affected-params='" + parameters[i]['affected_params_list'] + "' data-name='" + escapeHtml(parameters[i]['name']) + "'>";
+						content +=	"<option value='INIALLMULTISELECT'>SEMUA</option>";
+					}
+					for (var j=0; j<parameters[i]['data'].length; j++) {
+						var data = parameters[i]['data'][j];
+						content += "<option value='" + data['id'] + "'>" + data['value'] + "</option>";
+					}
+					content += "</select>";
+					line_helper ++;
+				} else if (parameters[i]['type'] == 'foreign_affected') {
+					content += "<select id='inp_" + parameters[i]['params'] + "' class='input select' data-affected-params='" + parameters[i]['affected_params_list'] + "' data-name='" + escapeHtml(parameters[i]['name']) + "'>";
+					content += 	"<option value='' selected>-- PILIH " + parameters[i]['name'] + "</option>";
+					content += "</select>";
+				} else if (parameters[i]['type'] == "foreign_multi_affected") {
+					content += "<select id='inp_" + parameters[i]['params'] + "' class='input select_multi' multiple data-affected-params='" + parameters[i]['affected_params_list'] + "' data-name='" + escapeHtml(parameters[i]['name']) + "'>";
+					content += "</select>";
+					line_helper ++;
+				}
+				content += "</td>";
+			}
+			
+			if (line_helper % 2 == 1) content += "</tr>";
+			line_helper ++;
+		}
+	}
+	$('#tblInput').html(content);
+	openTableInput();
+	$('#tblInput').find(".input:not(.datepicker)").first().focus();
+	
+	// tiap onchange check value (only if selector disabled)
+	$('.input.datepicker').change(function() {
+		
+		// khusus startdate
+		if ($(this).prop("id") == "inp_startdate") {
+			var date = $(this).val();
+			setTimeout(function() {
+				var selectedDate = new Date(date.substr(6,4) + "-" + date.substr(3,2) + "-" + date.substr(0,2));
+				var endDate = new Date(selectedDate.getTime());
+				
+				$('#inp_enddate').datepicker('option', 'minDate', endDate).focus();
+			}, 50);
+		}
+		
+		if ($('#selectLaporan').is(":disabled")) {
+			var id = $(this).prop("id");
+			var value = $(this).val();
+			if (saved_input[id] == value) $(this).removeClass("changed_value");
+			else $(this).addClass("changed_value");
+			
+			checkButtonReset();
+		}
+	}).focus(function() {
+		if (!_isDashboard) {
+			$('body').height(window.innerHeight + 300);
+		}
+	}).blur(function() {
+		if (!_isDashboard) {
+			$('body').height(window.innerHeight - 300);
+		}
+	});
+	$('.input.string').keyup(function(e) {
+		if ($('#selectLaporan').is(":disabled")) {
+			var id = $(this).prop("id");
+			var value = $(this).val();
+			if (saved_input[id] == value) $(this).removeClass("changed_value");
+			else $(this).addClass("changed_value");
+			
+			checkButtonReset();
+		}
+	});
+	$('.input.numeric').keyup(function() {
+		if ($('#selectLaporan').is(":disabled")) {
+			var id = $(this).prop("id");
+			var value = $(this).val();
+			if (saved_input[id] == value) $(this).removeClass("changed_value");
+			else $(this).addClass("changed_value");
+			
+			checkButtonReset();
+		}
+	});
+	$('.input.select, .input.select_year').change(function() {
+		if ($('#selectLaporan').is(":disabled")) {
+			var id = $(this).prop("id");
+			var value = $(this).val();
+			if (saved_input[id] == value) $(this).removeClass("changed_value");
+			else $(this).addClass("changed_value");
+			
+			checkButtonReset();
+		}
+			
+		var affected_params_list = $(this).data("affected-params");
+		if (typeof affected_params_list !== "undefined" && affected_params_list != "") {
+			
+			var affected_params = affected_params_list.split(",");
+			
+			var obj = $(this);
+			var source_params = obj.prop("id").split("_")[1];
+			var value = obj.val();
+			var oldvalue = obj.data("old");
+			if (value != "") {
+				
+				obj.prop("disabled", true).trigger("chosen:updated");
+				setTimeout(function() {
+					obj.find("+.chosen-container .chosen-focus-input").blur();
+				},50);
+				
+				// get params
+				var data = {};
+				data.act = "report";
+				data.params = {};
+				data.params.sub_act = "get_affected_params";
+				data.params.report_id = report_id;
+				data.params.affected_params = affected_params;
+				data.params.source_params = encodeURIComponent(addslashes(source_params));
+				data.params.value = encodeURIComponent(addslashes(value));
+				ajaxPost(data, function(resp) { 
+					result = JSON.parse(resp);
+					if (result['status'] == "00000") {
+						
+						obj.prop("disabled", false).trigger("chosen:updated");
+						
+						for (var i=0; i<affected_params.length; i++) {
+							$('#inp_' + affected_params[i] + ' .on_the_fly').remove();
+							var content = "";
+							if ($('#inp_' + affected_params[i]).hasClass("select_multi")) content += "<option value='INIALLMULTISELECT' class='on_the_fly'>SEMUA</option>";
+							if (typeof result['return']['data'][affected_params[i]] !== "undefined") {
+								for (var j=0; j<result['return']['data'][affected_params[i]].length; j++) {
+									content += "<option value='" + result['return']['data'][affected_params[i]][j]['id'] + "' class='on_the_fly'>" + result['return']['data'][affected_params[i]][j]['value'] + "</option>";
+								}
+							}
+							$('#inp_' + affected_params[i]).append(content).trigger("chosen:updated").trigger("change");
+							$('#inp_' + affected_params[i]).find("+.chosen-container .chosen-focus-input").focus();
+						}
+					} else {
+						showInformation("[" + result['status'] + "] KESALAHAN", result["message"], "OK", "", "", function() {
+							obj.prop("disabled", false).val(oldvalue).trigger("chosen:updated");
+							obj.find("+.chosen-container .chosen-focus-input").focus();
+						});
+					}
+				}, function(resp) {
+					obj.prop("disabled", false).val(oldvalue).trigger("chosen:updated");
+					obj.find("+.chosen-container .chosen-focus-input").focus();
+				});
+			} else {
+				for (var i=0; i<affected_params.length; i++) {
+					$('#inp_' + affected_params[i] + ' .on_the_fly').remove();
+					$('#inp_' + affected_params[i]).trigger("chosen:updated").trigger("change");
+				}
+			}
+		}
+	});
+	$('.input.select').on('chosen:showing_dropdown', function(e, params) {
+		$(this).data("old", $(this).val());
+	});
+	$('.input.select_multi').change(function() {
+		var value = $(this).val();
+		if (value == null) value = [];
+		var _hasAll = $(this).hasClass("has_all");
+		
+		if (!_hasAll) {
+			// INIALLMULTISELECT baru dipilih (unselect semua yang lain)
+			if (value.indexOf("INIALLMULTISELECT") >= 0) {
+				$(this).find('option').not('option[value="INIALLMULTISELECT"]').prop("selected", false).trigger("chosen:updated");
+				$(this).addClass("has_all");
+				
+				value = [];
+				value.push("INIALLMULTISELECT");
+			} else {
+				$(this).removeClass("has_all");
+			}
+		} else {
+			// option lain baru dipilih untuk menggantikan INIALLMULTISELECT
+			if (value.length > 1) {
+				$(this).find('option[value="INIALLMULTISELECT"]').prop("selected", false).trigger("chosen:updated");
+				
+				var found = -1;
+				for (var i=0; i<value.length; i++) {
+					if (value[i] == "INIALLMULTISELECT") {
+						found = i;
+						break;
+					}
+				}
+				if (found >= 0) {
+					value.splice(found,1);
+				}
+			}
+			$(this).removeClass("has_all");
+		}
+		
+		if ($('#selectLaporan').is(":disabled")) {
+			var id = $(this).prop("id");
+			
+			var found = false;
+			if (saved_input[id].length == value.length) {
+				for (var i=0; i<saved_input[id].length; i++) {
+					if (saved_input[id][i] != value[i]) {
+						found = true;
+						break;
+					}
+				}
+			} else {
+				found = true;
+			}
+			if (!found) $(this).removeClass("changed_value");
+			else $(this).addClass("changed_value");
+			
+			checkButtonReset();
+		}
+		
+		var affected_params_list = $(this).data("affected-params");
+		if (typeof affected_params_list !== "undefined" && affected_params_list != "") {
+			
+			var affected_params = affected_params_list.split(",");
+			
+			var obj = $(this);
+			var source_params = obj.prop("id").split("_")[1];
+			var value = obj.val();
+			if (value == null) value = [];
+			var oldvalue = obj.data("old");
+			if (value.length > 0) {
+				
+				obj.prop("disabled", true).trigger("chosen:updated");
+				
+				// jika INIALLMULTISELECT
+				if (value.indexOf("INIALLMULTISELECT") >= 0) {
+					value = [];
+					obj.find('option').each(function() {
+						var val = $(this).val();
+						if (val != "INIALLMULTISELECT") value.push(val);
+					});
+				}
+				
+				// get params
+				var data = {};
+				data.act = "report";
+				data.params = {};
+				data.params.sub_act = "get_affected_params";
+				data.params.report_id = report_id;
+				data.params.affected_params = affected_params;
+				data.params.source_params = encodeURIComponent(addslashes(source_params));
+				data.params.value = value;
+				ajaxPost(data, function(resp) { 
+					result = JSON.parse(resp);
+					if (result['status'] == "00000") {
+						
+						obj.prop("disabled", false).trigger("chosen:updated");
+						
+						for (var i=0; i<affected_params.length; i++) {
+							$('#inp_' + affected_params[i] + ' .on_the_fly').remove();
+							var content = "";
+							if ($('#inp_' + affected_params[i]).hasClass("select_multi")) content += "<option value='INIALLMULTISELECT' class='on_the_fly'>SEMUA</option>";
+							if (typeof result['return']['data'][affected_params[i]] !== "undefined") {
+								for (var j=0; j<result['return']['data'][affected_params[i]].length; j++) {
+									content += "<option value='" + result['return']['data'][affected_params[i]][j]['id'] + "' class='on_the_fly'>" + result['return']['data'][affected_params[i]][j]['value'] + "</option>";
+								}
+							}
+							$('#inp_' + affected_params[i]).append(content).trigger("chosen:updated").trigger("change");
+							$('#inp_' + affected_params[i]).find("+.chosen-container .chosen-focus-input").focus();
+						}
+					} else {
+						showInformation("[" + result['status'] + "] KESALAHAN", result["message"], "OK", "", "", function() {
+							obj.prop("disabled", false).val(JSON.parse(oldvalue)).trigger("chosen:updated");
+						});
+					}
+				}, function(resp) {
+					obj.prop("disabled", false).val(JSON.parse(oldvalue)).trigger("chosen:updated");
+				});
+			} else {				
+				for (var i=0; i<affected_params.length; i++) {
+					$('#inp_' + affected_params[i] + ' .on_the_fly').remove();
+					$('#inp_' + affected_params[i]).trigger("chosen:updated").trigger("change");
+				}
+			}
+		}
+	});
+	$('.input.select_multi').on('chosen:showing_dropdown', function(e, params) {
+		var value = $(this).val();
+		if (value == null) value = [];
+		$(this).data("old", JSON.stringify(value));
+	});
+	
+	// set visual
+	setDatepicker();
+	$('.select').width(190).chosen({
+		no_results_text: "KATA TIDAK DITEMUKAN",
+	});
+	$('.select_multi').width(350).chosen({
+		no_results_text: "KATA TIDAK DITEMUKAN",
+		placeholder_text_multiple: "PILIH SALAH SATU ATAU LEBIH",
+	});
+	
+	// khusus enddate
+	if ($('#inp_enddate').size() > 0) {
+		if ($('#inp_startdate').size() > 0) {
+			var date = $('#inp_startdate').val();
+			var selectedDate = new Date(date.substr(6,4) + "-" + date.substr(3,2) + "-" + date.substr(0,2));
+			var endDate = new Date(selectedDate.getTime());
+			
+			$('#inp_enddate').datepicker('option', 'minDate', endDate);
+		}
+	}
+}
+
+function generateReport() {
+	
+	// init
+	saved_collapsed = {};
+	if (left_headers !== null) {
+		for (var level=0; level<left_headers.length; level++) {
+			for (var idx=0; idx<left_headers[level].length; idx++) {
+				var header = left_headers[level][idx];
+				if (typeof header['collapse_col_parent'] != "undefined") {
+					saved_collapsed[header['collapse_col_parent']] = true;
+					if (typeof header['collapsed'] != "undefined") saved_collapsed[header['collapse_col_parent']] = header['collapsed'];
+				}
+			}
+		}
+	}
+	
+	if (right_headers !== null) {
+		for (var level=0; level<right_headers.length; level++) {
+			for (var idx=0; idx<right_headers[level].length; idx++) {
+				var header = right_headers[level][idx];
+				if (typeof header['collapse_col_parent'] != "undefined") {
+					saved_collapsed[header['collapse_col_parent']] = true;
+					if (typeof header['collapsed'] != "undefined") saved_collapsed[header['collapse_col_parent']] = header['collapsed'];
+				}
+			}
+		}
+	}
+	
+	// check col children header with filter and sort
+	if (left_headers !== null) {
+		for (var level=0; level<left_headers.length; level++) {
+			for (var idx=0; idx<left_headers[level].length; idx++) {
+				var header = left_headers[level][idx];
+				if (typeof header['collapse_col_children'] != "undefined" && (typeof header['sort'] != "undefined" || typeof header['filter'] != "undefined")) {
+					
+					// check di filter
+					if (typeof filter[header['filter']] != "undefined" && filter[header['filter']] != "") {
+						saved_collapsed[header['collapse_col_children']] = false;
+					}
+					
+					// check di sort
+					var temp = sort.split(" ");
+					if (temp[0] == header['sort']) {
+						saved_collapsed[header['collapse_col_children']] = false;
+					}
+				}
+			}
+		}
+	}
+	
+	// check col children header with filter and sort
+	if (right_headers !== null) {
+		for (var level=0; level<right_headers.length; level++) {
+			for (var idx=0; idx<right_headers[level].length; idx++) {
+				var header = right_headers[level][idx];
+				if (typeof header['collapse_col_children'] != "undefined" && (typeof header['sort'] != "undefined" || typeof header['filter'] != "undefined")) {
+					
+					// check di filter
+					if (typeof filter[header['filter']] != "undefined" && filter[header['filter']] != "") {
+						saved_collapsed[header['collapse_col_children']] = false;
+					}
+					
+					// check di sort
+					var temp = sort.split(" ");
+					if (temp[0] == header['sort']) {
+						saved_collapsed[header['collapse_col_children']] = false;
+					}
+				}
+			}
+		}
+	}
+	
+	// init for sum and max and avg group by
+	saved_sum_group_by = {};
+	saved_max_group_by = {};
+	saved_avg_group_by = {};
+	for (var group_identifier in group_agg_fields) {
+		for (var z=0; z<group_agg_fields[group_identifier].length; z++) {
+			var identifier = group_agg_fields[group_identifier][z].split("=")[0];
+			var value = group_agg_fields[group_identifier][z].split("=")[1];
+			if (value == "sum" || value.substr(0,3) == "sum") {
+				
+				if (identifier.indexOf("^") >= 0) {
+					
+					// for pivot identifier
+					if (rows.length > 0) {
+						for (var i=0; i<rows[0].length; i++) {
+							if (identifier.substr(0, identifier.indexOf("^")) == rows[0][i]['identifier'].substr(0, identifier.indexOf("^"))) {
+								if (typeof saved_sum_group_by[group_identifier] == "undefined") saved_sum_group_by[group_identifier] = {};
+								saved_sum_group_by[group_identifier][rows[0][i]['identifier']] = 0;
+							}
+						}
+					}
+				} else {
+					if (typeof saved_sum_group_by[group_identifier] == "undefined") saved_sum_group_by[group_identifier] = {};
+					saved_sum_group_by[group_identifier][identifier] = 0;
+				}
+			} else if (value == "max") {
+				if (typeof saved_max_group_by[group_identifier] == "undefined") saved_max_group_by[group_identifier] = {};
+				saved_max_group_by[group_identifier][identifier] = 0;
+			} else if (value == "avg" || value.substr(0,3) == "avg") {
+				
+				if (identifier.indexOf("^") >= 0) {
+					
+					// for pivot identifier
+					if (rows.length > 0) {
+						for (var i=0; i<rows[0].length; i++) {
+							if (identifier.substr(0, identifier.indexOf("^")) == rows[0][i]['identifier'].substr(0, identifier.indexOf("^"))) {
+								if (typeof saved_avg_group_by[group_identifier] == "undefined") saved_avg_group_by[group_identifier] = {};
+								saved_avg_group_by[group_identifier][rows[0][i]['identifier']] = {"sum": 0, "count": 0};
+							}
+						}
+					}
+				} else {
+					if (typeof saved_avg_group_by[group_identifier] == "undefined") saved_avg_group_by[group_identifier] = {};
+					saved_avg_group_by[group_identifier][identifier] = {"sum": 0, "count": 0};
+				}
+			}
+		}
+	}
+	
+	var content = "<tr>";
+	content += 	"<td>";
+	content +=		"<div>";
+	content +=			"<table style='width:auto'>";
+	if (left_headers !== null) {
+		for (var level=0; level<left_headers.length; level++) {
+			content += "<tr>";
+			for (var idx=0; idx<left_headers[level].length; idx++) {
+				var header = left_headers[level][idx];
+				
+				// put classes for left_header_json
+				var classes = [];
+				var id = "";
+				if (typeof header['collapse_col_parent'] != "undefined") {
+					classes.push("collapse_col_parent");
+					classes.push(typeof header['collapse_col_direction'] != "undefined" ? "arrow-" + header['collapse_col_direction'] : "arrow-right");
+					id = header['collapse_col_parent'];
+				}
+				if (typeof header['collapse_col_children'] != "undefined") {
+					classes.push("collapse_col_children");
+					classes.push(header['collapse_col_children']);
+					if (saved_collapsed[header['collapse_col_children']]) classes.push("hide_col");
+				}
+				
+				var width = typeof header['width'] != "undefined" ? header['width'] : 150;
+				var height = typeof header['height'] != "undefined" ? header['height'] : 38;
+				content += "<th id='" + id + "' " + (typeof header['sort'] != "undefined" ? "data-sort='" + header['sort'] + "' data-sort-callback='sortReport'" : "") + " " + (typeof header['filter'] != "undefined" ? "data-filter='" + header['filter'] + "' data-filter-callback='filterReport'" : "") + " class='left_side " + classes.join(" ") + "' rowspan=" + (typeof header['rowspan'] != "undefined" ? header['rowspan'] : 1) + " colspan=" + (typeof header['colspan'] != "undefined" ? header['colspan'] : 1) + " style='width:" + width + "px;height:" + height + "px;"
+				if (typeof header['style'] != "undefined") {
+					var styles = header['style'].split(";");
+					for (var i=0; i<styles.length; i++) {
+						var temp = styles[i].split("=");
+						content += temp[0] + ":" + temp[1] + "!important;";
+					}
+				}
+				content += "'>" + header['text'] + "</th>";
+			}
+			content += "</tr>";
+		}
+	}
+	content +=			"</table>";
+	content +=		"</div>";
+	content += 	"</td>";
+	content += 	"<td>";
+	content +=		"<div>";
+	content +=			"<table style='width:auto'>";
+	var first = true;
+	if (right_headers !== null) {
+		for (var level=0; level<right_headers.length; level++) {
+			content += "<tr>";
+			for (var idx=0; idx<right_headers[level].length; idx++) {
+				var header = right_headers[level][idx];
+				
+				// put classes for right_header_json
+				var classes = [];
+				var id = "";
+				if (typeof header['collapse_col_parent'] != "undefined") {
+					classes.push("collapse_col_parent");
+					classes.push(typeof header['collapse_col_direction'] != "undefined" ? "arrow-" + header['collapse_col_direction'] : "arrow-right");
+					id = header['collapse_col_parent'];
+				}
+				if (typeof header['collapse_col_children'] != "undefined") {
+					classes.push("collapse_col_children");
+					classes.push(header['collapse_col_children']);
+					if (saved_collapsed[header['collapse_col_children']]) classes.push("hide_col");
+				}
+				
+				var width = typeof header['width'] != "undefined" ? header['width'] : 150;
+				var height = typeof header['height'] != "undefined" ? header['height'] : 38;
+				content += "<th id='" + id + "' " + (typeof header['sort'] != "undefined" ? "data-sort='" + header['sort'] + "' data-sort-callback='sortReport'" : "") + " " + (typeof header['filter'] != "undefined" ? "data-filter='" + header['filter'] + "' data-filter-callback='filterReport'" : "") + " class='right_side " + classes.join(" ") + "' rowspan=" + (typeof header['rowspan'] != "undefined" ? header['rowspan'] : 1) + " colspan=" + (typeof header['colspan'] != "undefined" ? header['colspan'] : 1) + " style='width:" + width + "px;height:" + height + "px;";
+				if (typeof header['style'] != "undefined") {
+					var styles = header['style'].split(";");
+					for (var i=0; i<styles.length; i++) {
+						var temp = styles[i].split("=");
+						content += temp[0] + ":" + temp[1] + "!important;";
+					}
+				}
+				content += "'>" + header['text'] + "</th>";
+			}
+			if (first) {
+				content += "<th class='scrollWidth' style='width:" + (_isDashboard ? 17 : 0) + "px' rowspan=99></th>";
+				first = false;
+			}
+			content += "</tr>";
+		}
+	}
+	content +=			"</table>";
+	content +=		"</div>";
+	content += 	"</td>";
+	content += "</tr>";
+	content += "<tr>";
+	content += 	"<td>";
+	content +=		"<div>";
+	content +=			"<table style='width:0px'>";
+	
+	// init collapse agg field
+	var collapse_agg = {};
+	if (collapse_agg_fields.length > 0) {
+		collapse_agg_fields = collapse_agg_fields.split(";");
+		for (var i=0; i<collapse_agg_fields.length; i++) {
+			var temp = collapse_agg_fields[i].split("=");
+			if (typeof collapse_agg[temp[0]] == "undefined") collapse_agg[temp[0]] = [];
+			collapse_agg[temp[0]].push(temp[1]);
+		}
+	}
+	
+	// init group collapse agg field
+	var group_collapse_agg = {};
+	if (group_collapse_agg_fields.length > 0) {
+		group_collapse_agg_fields = group_collapse_agg_fields.split(";");
+		for (var i=0; i<group_collapse_agg_fields.length; i++) {
+			var temp = group_collapse_agg_fields[i].split("=");
+			if (typeof group_collapse_agg[temp[0]] == "undefined") group_collapse_agg[temp[0]] = [];
+			group_collapse_agg[temp[0]].push(temp[1]);
+		}
+	}
+	
+	// distinct field
+	var last_distinct_field = {};
+	if (distinct_fields.length > 0) {
+		for (var i=0; i<distinct_fields.length; i++) {
+			last_distinct_field[distinct_fields[i]] = "";
+		}
+	}
+	
+	if (stickies.length > 0) {
+		for (var i=0; i<stickies.length; i++) {
+			
+			// reset distinct field every group by
+			if (typeof stickies[i][0]['group_agg_field'] != "undefined") {
+				if (distinct_fields.length > 0) {
+					for (var z=0; z<distinct_fields.length; z++) {
+						last_distinct_field[distinct_fields[z]] = "";
+					}
+				}
+			}
+			
+			// init
+			saved_group_by_value[i] = {};
+			
+			content +=			"<tr id='sticky_" + i + "' class='tr_sticky'>";
+			for (var j=0; j<stickies[i].length; j++) {
+				var sticky = stickies[i][j];
+				var text = sticky['text'];
+				var align = "left";
+				var textarea_height = 0;
+				var max_length = 0;
+				var font_weight = "normal";
+				var font_style = "normal";
+				var text_decoration = "normal";
+				var isLink = false;
+				var condition = {};
+				if (typeof sticky['collapse_row_parent'] != "undefined") sticky['collapse_row_parent'] = sticky['collapse_row_parent'].replace(/^[^a-z]+|[^\w:.-]+/gi, "");
+				if (typeof sticky['collapse_row_children'] != "undefined") sticky['collapse_row_children'] = sticky['collapse_row_children'].replace(/^[^a-z]+|[^\w:.-]+/gi, "");
+				
+				// for sum and max and avg group by
+				if (typeof sticky['collapse_agg_field'] == "undefined" && typeof sticky['group_collapse_agg_field'] == "undefined" && typeof sticky['collapse_row_parent'] == "undefined" && typeof sticky['group_agg_field'] == "undefined") {
+					for (var group_identifier in saved_sum_group_by) {
+						if (typeof saved_sum_group_by[group_identifier][sticky['identifier']] != "undefined") {
+							saved_sum_group_by[group_identifier][sticky['identifier']] += (isNaN(text) ? 0 : text*1);
+						}
+					}
+					for (var group_identifier in saved_max_group_by) {
+						if (typeof saved_max_group_by[group_identifier][sticky['identifier']] != "undefined") {
+							saved_max_group_by[group_identifier][sticky['identifier']] = Math.max(isNaN(text) ? 0 : text*1, saved_max_group_by[group_identifier][sticky['identifier']]);
+						}
+					}
+					for (var group_identifier in saved_avg_group_by) {
+						if (typeof saved_avg_group_by[group_identifier][sticky['identifier']] != "undefined") {
+							saved_avg_group_by[group_identifier][sticky['identifier']]['sum'] += (isNaN(text) ? 0 : text*1);
+							saved_avg_group_by[group_identifier][sticky['identifier']]['count'] ++;
+						}
+					}
+				}
+				
+				if (typeof sticky['collapse_row_parent'] != "undefined") {
+					saved_collapsed[sticky['collapse_row_parent']] = true;
+					if (typeof sticky['collapsed'] != "undefined") saved_collapsed[sticky['collapse_row_parent']] = sticky['collapsed'];
+				}
+				
+				// put classes for sticky_json
+				var classes = [];
+				var id = "";
+				if (typeof sticky['collapse_col_children'] != "undefined") {
+					classes.push("collapse_col_children");
+					classes.push(sticky['collapse_col_children']);
+					if (saved_collapsed[sticky['collapse_col_children']]) classes.push("hide_col");
+				}
+				if (typeof sticky['collapse_row_parent'] != "undefined") {
+					classes.push("collapse_row_parent");
+					id = sticky['collapse_row_parent'];
+				}
+				if (typeof sticky['collapse_row_children'] != "undefined") {
+					classes.push("collapse_row_children");
+					classes.push(sticky['collapse_row_children']);
+					if (saved_collapsed[sticky['collapse_row_children']]) classes.push("hide_row");
+					
+					// sum and avg for collapse agg field
+					if (typeof sticky['group_agg_field'] == 'undefined') {
+						for (z=0; z<saved_waiting_sum.length; z++) {
+							if (saved_waiting_sum[z]['identifier'] == sticky['identifier']) {
+								saved_waiting_sum[z]['value'] += (isNaN(text) ? 0 : text*1);
+							}
+						}
+						for (z=0; z<saved_waiting_avg.length; z++) {
+							if (saved_waiting_avg[z]['identifier'] == sticky['identifier']) {
+								saved_waiting_avg[z]['value'] += (isNaN(text) ? 0 : text*1);
+								saved_waiting_avg[z]['count'] ++;
+							}
+						}
+						for (z=0; z<saved_waiting_max.length; z++) {
+							if (saved_waiting_max[z]['identifier'] == sticky['identifier']) {
+								saved_waiting_max[z]['value'] = Math.max(saved_waiting_max[z]['value']*1, (isNaN(text) ? 0 : text*1));
+							}
+						}
+						for (z=0; z<saved_waiting_min.length; z++) {
+							if (saved_waiting_min[z]['identifier'] == sticky['identifier']) {
+								saved_waiting_min[z]['value'] = Math.min(saved_waiting_min[z]['value']*1, (isNaN(text) ? 0 : text*1));
+							}
+						}
+					}
+				}
+				if (typeof sticky['textarea'] != "undefined") {
+					textarea_height = sticky['textarea']*1;
+				}
+				if (typeof sticky['maxlength'] != "undefined") {
+					max_length = sticky['maxlength']*1;
+				}
+				
+				// collapse agg field
+				if (typeof sticky['collapse_agg_field'] != "undefined") {
+					
+					classes.push("collapse_agg_row");
+					if (typeof collapse_agg[sticky['identifier']] != "undefined") {
+						for (var z=0; z<collapse_agg[sticky['identifier']].length; z++) {
+							var value = collapse_agg[sticky['identifier']][z];
+							if (value == "center") {
+								align = "center";
+							} else if (value == "right") {
+								align = "right";
+							} else if (value == "sum" || value.substr(0,3) == "sum") {
+								id = "waiting-sum-" + sticky['identifier'] + "-" + i;
+								var digit = value.substr(3)*1;
+								
+								// search for identifier (if exists)
+								var found = -1;
+								for (x=0; x<saved_waiting_sum.length; x++) {
+									if (saved_waiting_sum[x]['identifier'] == sticky['identifier']) {
+										found = x;
+										break;
+									}
+								}
+
+								// if found, save and recycle
+								if (found >= 0) {
+									var temp = {};
+									temp['id'] = saved_waiting_sum[found]['id'];
+									temp['identifier'] = sticky['identifier'];
+									temp['value'] = saved_waiting_sum[found]['value'];
+									temp['digit'] = saved_waiting_sum[found]['digit'];
+									
+									// save to ready_to_sum
+									var search = -1;
+									for (x=0; x<saved_ready_to_sum.length; x++) {
+										if (saved_ready_to_sum[x]['id'] == temp['id']) {
+											search = x;
+											break;
+										}
+									}
+									if (search == -1) {
+										saved_ready_to_sum.push(temp);
+									} else {
+										saved_ready_to_sum[search]['value'] = temp['value'];
+									}
+									
+									saved_waiting_sum[found]['id'] = id;
+									saved_waiting_sum[found]['value'] = 0;
+									saved_waiting_sum[found]['digit'] = digit;
+								} else {
+									var temp = {};
+									temp['id'] = id;
+									temp['identifier'] = sticky['identifier'];
+									temp['value'] = 0;
+									temp['digit'] = digit;
+									saved_waiting_sum.push(temp);
+								}
+								align = "right";
+							} else if (value == "avg" || value.substr(0,3) == "avg") {
+								id = "waiting-avg-" + sticky['identifier'] + "-" + i;
+								var digit = value.substr(3)*1;
+								
+								// search for identifier (if exists)
+								var found = -1;
+								for (x=0; x<saved_waiting_avg.length; x++) {
+									if (saved_waiting_avg[x]['identifier'] == sticky['identifier']) {
+										found = x;
+										break;
+									}
+								}
+
+								// if found, save and recycle
+								if (found >= 0) {
+									var temp = {};
+									temp['id'] = saved_waiting_avg[found]['id'];
+									temp['identifier'] = sticky['identifier'];
+									temp['value'] = saved_waiting_avg[found]['value'];
+									temp['count'] = saved_waiting_avg[found]['count'];
+									temp['digit'] = saved_waiting_avg[found]['digit'];
+									
+									// save to ready_to_avg
+									var search = -1;
+									for (x=0; x<saved_ready_to_avg.length; x++) {
+										if (saved_ready_to_avg[x]['id'] == temp['id']) {
+											search = x;
+											break;
+										}
+									}
+									if (search == -1) {
+										saved_ready_to_avg.push(temp);
+									} else {
+										saved_ready_to_avg[search]['value'] = temp['value'];
+										saved_ready_to_avg[search]['count'] = temp['count'];
+									}
+									
+									saved_waiting_avg[found]['id'] = id;
+									saved_waiting_avg[found]['value'] = 0;
+									saved_waiting_avg[found]['count'] = 0;
+									saved_waiting_avg[found]['digit'] = digit;
+								} else {
+									var temp = {};
+									temp['id'] = id;
+									temp['identifier'] = sticky['identifier'];
+									temp['value'] = 0;
+									temp['count'] = 0;
+									temp['digit'] = digit;
+									saved_waiting_avg.push(temp);
+								}
+								align = "right";
+							} else if (value == "max" || value.substr(0,3) == "max") {
+								id = "waiting-max-" + sticky['identifier'] + "-" + i;
+								var digit = value.substr(3)*1;
+								
+								// search for identifier (if exists)
+								var found = -1;
+								for (x=0; x<saved_waiting_max.length; x++) {
+									if (saved_waiting_max[x]['identifier'] == sticky['identifier']) {
+										found = x;
+										break;
+									}
+								}
+
+								// if found, save and recycle
+								if (found >= 0) {
+									var temp = {};
+									temp['id'] = saved_waiting_max[found]['id'];
+									temp['identifier'] = sticky['identifier'];
+									temp['value'] = saved_waiting_max[found]['value'];
+									temp['digit'] = saved_waiting_max[found]['digit'];
+									
+									// save to ready_to_max
+									var search = -1;
+									for (x=0; x<saved_ready_to_max.length; x++) {
+										if (saved_ready_to_max[x]['id'] == temp['id']) {
+											search = x;
+											break;
+										}
+									}
+									if (search == -1) {
+										saved_ready_to_max.push(temp);
+									} else {
+										saved_ready_to_max[search]['value'] = temp['value'];
+									}
+									
+									saved_waiting_max[found]['id'] = id;
+									saved_waiting_max[found]['value'] = -999999999999;
+									saved_waiting_max[found]['digit'] = digit;
+								} else {
+									var temp = {};
+									temp['id'] = id;
+									temp['identifier'] = sticky['identifier'];
+									temp['value'] = -999999999999;
+									temp['digit'] = digit;
+									saved_waiting_max.push(temp);
+								}
+								align = "right";
+							} else if (value == "min" || value.substr(0,3) == "min") {
+								id = "waiting-min-" + sticky['identifier'] + "-" + i;
+								var digit = value.substr(3)*1;
+								
+								// search for identifier (if exists)
+								var found = -1;
+								for (x=0; x<saved_waiting_min.length; x++) {
+									if (saved_waiting_min[x]['identifier'] == sticky['identifier']) {
+										found = x;
+										break;
+									}
+								}
+
+								// if found, save and recycle
+								if (found >= 0) {
+									var temp = {};
+									temp['id'] = saved_waiting_min[found]['id'];
+									temp['identifier'] = sticky['identifier'];
+									temp['value'] = saved_waiting_min[found]['value'];
+									temp['digit'] = saved_waiting_min[found]['digit'];
+									
+									// save to ready_to_min
+									var search = -1;
+									for (x=0; x<saved_ready_to_min.length; x++) {
+										if (saved_ready_to_min[x]['id'] == temp['id']) {
+											search = x;
+											break;
+										}
+									}
+									if (search == -1) {
+										saved_ready_to_min.push(temp);
+									} else {
+										saved_ready_to_min[search]['value'] = temp['value'];
+									}
+									
+									saved_waiting_min[found]['id'] = id;
+									saved_waiting_min[found]['value'] = 999999999999;
+									saved_waiting_min[found]['digit'] = digit;
+								} else {
+									var temp = {};
+									temp['id'] = id;
+									temp['identifier'] = sticky['identifier'];
+									temp['value'] = 999999999999;
+									temp['digit'] = digit;
+									saved_waiting_min.push(temp);
+								}
+								align = "right";
+							} else if (value == "bold") {
+								font_weight = "bold";
+							} else if (value == "italic") {
+								font_style = "italic";
+							} else if (value == "underline") {
+								text_decoration = "underline";
+							} else if (value.substr(0,5) == "func>") {
+								id = "waiting-func-" + sticky['identifier'] + "-" + i;
+								var temp = {};
+								temp['i'] = i;
+								temp['id'] = id;
+								temp['identifier'] = sticky['identifier'];
+								temp['func'] = value.substr(5);
+								saved_waiting_func.push(temp);
+							} else {
+								text = value;
+							}
+						}
+					}
+					
+				// group collapse agg field
+				} else if (typeof sticky['group_collapse_agg_field'] != "undefined") {
+					
+					classes.push("group_collapse_agg_row");
+					if (typeof group_collapse_agg[sticky['identifier']] != "undefined") {
+						for (var z=0; z<group_collapse_agg[sticky['identifier']].length; z++) {
+							var value = group_collapse_agg[sticky['identifier']][z];
+							if (value == "center") {
+								align = "center";
+							} else if (value == "right") {
+								align = "right";
+							} else if (value == "sum" || value.substr(0,3) == "sum") {
+								id = "waiting-sum-group-collapse-" + sticky['identifier'] + "-" + i;
+								var digit = value.substr(3)*1;
+								
+								var temp = {};
+								temp['id'] = id;
+								temp['identifier'] = sticky['identifier'];
+								temp['value'] = 0;
+								temp['digit'] = digit;
+								temp['type'] = "sum";
+								saved_group_collapse.push(temp);
+								align = "right";
+							} else if (value == "avg" || value.substr(0,3) == "avg") {
+								id = "waiting-avg-group-collapse-" + sticky['identifier'] + "-" + i;
+								var digit = value.substr(3)*1;
+								
+								var temp = {};
+								temp['id'] = id;
+								temp['identifier'] = sticky['identifier'];
+								temp['value'] = 0;
+								temp['count'] = 0;
+								temp['digit'] = digit;
+								temp['type'] = "avg";
+								saved_group_collapse.push(temp);
+								align = "right";
+							} else if (value == "max" || value.substr(0,3) == "max") {
+								id = "waiting-max-group-collapse-" + sticky['identifier'] + "-" + i;
+								var digit = value.substr(3)*1;
+								
+								var temp = {};
+								temp['id'] = id;
+								temp['identifier'] = sticky['identifier'];
+								temp['value'] = -999999999999;
+								temp['digit'] = digit;
+								temp['type'] = "max";
+								saved_group_collapse.push(temp);
+								align = "right";
+							} else if (value == "min" || value.substr(0,3) == "min") {
+								id = "waiting-min-group-collapse-" + sticky['identifier'] + "-" + i;
+								var digit = value.substr(3)*1;
+								
+								var temp = {};
+								temp['id'] = id;
+								temp['identifier'] = sticky['identifier'];
+								temp['value'] = 999999999999;
+								temp['digit'] = digit;
+								temp['type'] = "min";
+								saved_group_collapse.push(temp);
+								align = "right";
+							} else if (value == "bold") {
+								font_weight = "bold";
+							} else if (value == "italic") {
+								font_style = "italic";
+							} else if (value == "underline") {
+								text_decoration = "underline";
+							} else if (value.substr(0,5) == "func>") {
+								id = "waiting-func-" + sticky['identifier'] + "-" + i;
+								var temp = {};
+								temp['i'] = i;
+								temp['id'] = id;
+								temp['identifier'] = sticky['identifier'];
+								temp['func'] = value.substr(5);
+								saved_waiting_func_group.push(temp);
+							} else {
+								text = value;
+							}
+						}
+					}
+				
+				// group agg field
+				} else if (typeof sticky['group_agg_field'] != "undefined") {
+					
+					classes.push("group_agg_row");
+					classes.push(sticky['group_agg_field']);
+					var group_identifier = sticky['group_agg_field'].split("-")[1];
+					if (group_agg_fields !== null) {
+						if (typeof group_agg_fields[group_identifier] != "undefined") {
+							for (var z=0; z<group_agg_fields[group_identifier].length; z++) {
+								var identifier = group_agg_fields[group_identifier][z].split("=")[0];
+								if (identifier == sticky['identifier']) {
+									var value = group_agg_fields[group_identifier][z].split("=")[1];
+									if (value == "center") {
+										align = "center";
+									} else if (value == "right") {
+										align = "right";
+									} else if (value == "sum" || value.substr(0,3) == "sum") {
+										if (typeof saved_sum_group_by[group_identifier][sticky['identifier']] != "undefined") {
+											var digit = value.substr(3)*1;
+											text = formatCur(saved_sum_group_by[group_identifier][sticky['identifier']],digit);
+											align = "right";
+											
+											saved_group_by_value[i][sticky['identifier']] = saved_sum_group_by[group_identifier][sticky['identifier']];
+											saved_sum_group_by[group_identifier][sticky['identifier']] = 0;
+										}
+									} else if (value == "max") {
+										if (typeof saved_max_group_by[group_identifier][sticky['identifier']] != "undefined") {
+											text = formatCur(saved_max_group_by[group_identifier][sticky['identifier']]);
+											align = "right";
+											
+											saved_group_by_value[i][sticky['identifier']] = saved_max_group_by[group_identifier][sticky['identifier']];
+											saved_max_group_by[group_identifier][sticky['identifier']] = 0;
+										}
+									} else if (value == "avg" || value.substr(0,3) == "avg") {
+										if (typeof saved_avg_group_by[group_identifier][sticky['identifier']] != "undefined") {
+											var digit = value.substr(3)*1;
+											text = formatCur(saved_avg_group_by[group_identifier][sticky['identifier']]['sum'] / Math.max(saved_avg_group_by[group_identifier][sticky['identifier']]['count'],1), digit);
+											align = "right";
+											
+											saved_group_by_value[i][sticky['identifier']] = Math.round(saved_avg_group_by[group_identifier][sticky['identifier']]['sum'] / Math.max(saved_avg_group_by[group_identifier][sticky['identifier']]['count'],1), digit);
+											saved_avg_group_by[group_identifier][sticky['identifier']] = {"sum": 0, "count": 0};
+										}
+									} else if (value == "bold") {
+										font_weight = "bold";
+									} else if (value == "italic") {
+										font_style = "italic";
+									} else if (value == "underline") {
+										text_decoration = "underline";
+									} else if (value.substr(0,5) == "func>") {
+										var equation = value.substr(5);
+										for (var saved_key in saved_group_by_value[i]) {
+											var sanitizeRegex = saved_key.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+											var re = new RegExp("@" + sanitizeRegex + "@", 'g');
+											equation = equation.replace(re, saved_group_by_value[i][saved_key]);
+										}
+										try {
+											text = eval(equation) + "";
+										} catch(e) {}
+									} else if (value == "formatcur" || value.substr(0,9) == "formatcur") {
+										if (text.trim().length > 0) {
+											var digit = value.substr(9)*1;
+											text = formatCur(text,digit);
+											align = "right";
+										}
+									} else {
+										text = value;
+									}
+								}
+							}
+						}
+					}
+				} else {
+					
+					// check distinct field
+					if (typeof last_distinct_field[sticky['identifier']] != "undefined") {
+						if (last_distinct_field[sticky['identifier']] != "" && last_distinct_field[sticky['identifier']] == text) {
+							text = "";
+						} else {
+							last_distinct_field[sticky['identifier']] = text;
+						}
+					}
+					
+					// condition
+					if (typeof sticky['condition'] != "undefined") {
+						for (var z=0; z<sticky['condition'].length; z++) {
+							var cond = sticky['condition'][z];
+							if (typeof cond['if'] != "undefined" && typeof cond["then"] != "undefined") {
+								cond['if'] = cond['if'].replace(new RegExp("@value@", 'g'), text);
+								try {
+									if (eval(cond['if'])) {
+										var css = cond['then'].split(";");
+										for (var x=0; x<css.length; x++) {
+											var temp = css[x].split("=");
+											condition[temp[0]] = temp[1];
+										}
+									}
+								} catch(e) {}
+							}
+						}
+					}
+					
+					// column format
+					var formats = column_formats.split(";");
+					for (var z=0; z<formats.length; z++) {
+						var identifier = formats[z].split("=")[0];
+						if (identifier == sticky['identifier']) {
+							var value = formats[z].split("=")[1];
+							if (value == "center") {
+								align = "center";
+							} else if (value == "right") {
+								align = "right";
+							} else if (value == "formatcur" || value.substr(0,9) == "formatcur") {
+								if (text.trim().length > 0) {
+									var digit = value.substr(9)*1;
+									text = formatCur(text,digit);
+									align = "right";
+								}
+							} else if (value == "formatdate") {
+								if (text.trim().length > 0) {
+									text = showDate(text);
+									align = "center";
+								}
+							} else if (value == "formattime") {
+								if (text.trim().length > 0) {
+									text = showTime(text);
+									align = "center";
+								}
+							} else if (value == "formatdatetime") {
+								if (text.trim().length > 0) {
+									text = showDate(text.substr(0,8)) + " " + showTime(text.substr(8,6));
+									align = "center";
+								}
+							} else if (value == "formatmonth") {
+								if (text.trim().length > 0) {
+									text = getMonthsName(text.substr(4,2)*1, false) + " " + text.substr(0,4);
+									align = "left";
+								}
+							} else if (value == "bold") {
+								font_weight = "bold";
+							} else if (value == "italic") {
+								font_style = "italic";
+							} else if (value == "underline") {
+								text_decoration = "underline";
+							} else if (value == "link" || value == "linkleft" || value == "linkright") {
+								isLink = value == "linkleft" ? "linkleft" : "linkright";
+							} else if (value == "abslink" || value == "abslinkleft" || value == "abslinkright") {
+								isLink = value == "abslinkleft" ? "abslinkleft" : "abslinkright";
+							} else if (value == "propercase") {
+								text = properCase(text);
+							}
+						}
+					}
+				}
+				
+				// force css
+				if ((textarea_height > 0 || isLink) && typeof sticky['collapse_agg_field'] == "undefined" && typeof sticky['group_collapse_agg_field'] == "undefined" && typeof sticky['group_agg_field'] == "undefined") {
+					align = "center";
+				}
+				
+				content += "<td align='" + align + "' id='" + id + "' class='sticky_data " + classes.join(" ") + "'";
+				content += " style='font-weight:" + font_weight + ";font-style:" + font_style + ";text-decoration:" + text_decoration + ";";
+				// condition
+				if (Object.mySize(condition) > 0) {
+					for (var key in condition) {
+						content += key + ":" + condition[key] + "!important;";
+					}
+				}
+				if (i == 0) {
+					var width = typeof sticky['width'] != "undefined" ? sticky['width'] : 150;
+					content += "width:" + width + "px'";
+				}
+				content += "'><div style='height:" + (classes.indexOf("collapse_agg_row") >= 0 || classes.indexOf("group_collapse_agg_row") >= 0 || classes.indexOf("group_agg_row") >= 0 || classes.indexOf("collapse_row_parent") >= 0 ? (20 / body_scale) : data_height) + "px;overflow:hidden'>";
+				if (max_length > 0 && text.length > max_length) text = text.substr(0, max_length) + "&#8230;";
+				
+				if ((textarea_height > 0 || isLink) && typeof sticky['collapse_agg_field'] == "undefined" && typeof sticky['group_collapse_agg_field'] == "undefined" && typeof sticky['group_agg_field'] == "undefined") {
+					if (isLink) {
+						if (text.indexOf("(link:") >= 0) {
+							var url_text = text.substring(0, text.indexOf("(link:"));
+							var url_link = text.substring(text.indexOf("(link:") + 6, text.indexOf(")", text.indexOf("(link:") + 6));
+							content += "<a class='a_report " + isLink + "' href='" + (isLink.substr(0, 3) == "abs" ? url_link : ".." + url_link) + "' target='_blank'>" + url_text + "</a>";
+						} else {
+							content += text;
+						}
+					} else if (textarea_height > 0) {
+						content += "<textarea readonly style='width:98%;height:" + textarea_height + "px;resize:none;font-weight:" + font_weight + ";font-style:" + font_style + ";text-decoration:" + text_decoration + "'>" + text + "</textarea>";
+					}
+				} else {
+					content += text;
+				}
+				content += "</div></td>";
+			}
+			content +=			"</tr>";
+		}
+	} else {
+		content += "<tr><td class='sticky_data' colspan=999>&nbsp;</td></tr>";
+	}
+	content +=				"<tr>";
+	content +=                    "<td class='scrollWidth' style='height:" + (_isDashboard ? 17 : 0) + "px' ></td>";
+	content +=				"</tr>";
+	content +=			"</table>";
+	content +=		"</div>";
+	content += 	"</td>";
+	content += 	"<td>";
+	content +=		"<div class='scrollable'>";
+	content +=			"<table style='width:0px'>";
+	if (rows.length > 0) {
+		for (var i=0; i<rows.length; i++) {
+			
+			// reset distinct field every group by
+			if (typeof rows[i][0]['group_agg_field'] != "undefined") {
+				if (distinct_fields.length > 0) {
+					for (var z=0; z<distinct_fields.length; z++) {
+						last_distinct_field[distinct_fields[z]] = "";
+					}
+				}
+			}
+			
+			content +=		"<tr id='data_" + i + "' class='tr_data'>";
+			for (var j=0; j<rows[i].length; j++) {
+				var row = rows[i][j];
+				var text = row['text'];
+				var align = "left";
+				var textarea_height = 0;
+				var max_length = 0;
+				var font_weight = "normal";
+				var font_style = "normal";
+				var text_decoration = "normal";
+				var isLink = false;
+				var condition = {};
+				if (typeof row['collapse_row_children'] != "undefined") row['collapse_row_children'] = row['collapse_row_children'].replace(/^[^a-z]+|[^\w:.-]+/gi, "");
+				
+				// for sum and max group by
+				if (typeof row['collapse_agg_field'] == "undefined" && typeof row['group_collapse_agg_field'] == "undefined" && typeof row['collapse_row_parent'] == "undefined" && typeof row['group_agg_field'] == "undefined") {
+					for (var group_identifier in saved_sum_group_by) {
+						if (typeof saved_sum_group_by[group_identifier][row['identifier']] != "undefined") {
+							saved_sum_group_by[group_identifier][row['identifier']] += (isNaN(text) ? 0 : text*1);
+						}
+					}
+					for (var group_identifier in saved_max_group_by) {
+						if (typeof saved_max_group_by[group_identifier][row['identifier']] != "undefined") {
+							saved_max_group_by[group_identifier][row['identifier']] = Math.max(isNaN(text) ? 0 : text*1, saved_max_group_by[group_identifier][row['identifier']]);
+						}
+					}
+					for (var group_identifier in saved_avg_group_by) {
+						if (typeof saved_avg_group_by[group_identifier][row['identifier']] != "undefined") {
+							saved_avg_group_by[group_identifier][row['identifier']]['sum'] += (isNaN(text) ? 0 : text*1);
+							saved_avg_group_by[group_identifier][row['identifier']]['count'] ++;
+						}
+					}
+				}
+				
+				// put classes for data_json
+				var classes = [];
+				var id = "";
+				if (typeof row['collapse_col_children'] != "undefined") {
+					classes.push("collapse_col_children");
+					classes.push(row['collapse_col_children']);
+					if (saved_collapsed[row['collapse_col_children']]) classes.push("hide_col");
+				}
+				if (typeof row['collapse_row_children'] != "undefined") {
+					classes.push("collapse_row_children");
+					classes.push(row['collapse_row_children']);
+					if (saved_collapsed[row['collapse_row_children']]) classes.push("hide_row");
+					
+					// sum, avg, max, min for collapse agg field
+					if (typeof row['group_agg_field'] == 'undefined') {
+						for (z=0; z<saved_waiting_sum.length; z++) {
+							
+							// for pivot identifier
+							var isPivot = false;
+							if (saved_waiting_sum[z]['identifier'].indexOf("^") >= 0) {
+								if (saved_waiting_sum[z]['identifier'].substr(0, saved_waiting_sum[z]['identifier'].indexOf("^")) == row['identifier'].substr(0, saved_waiting_sum[z]['identifier'].indexOf("^"))) {
+									isPivot = true;
+								}
+							}
+							
+							if (isPivot || saved_waiting_sum[z]['identifier'] == row['identifier']) {
+								saved_waiting_sum[z]['value'] += (isNaN(text) ? 0 : text*1);
+							}
+						}
+						
+						for (z=0; z<saved_waiting_avg.length; z++) {
+							
+							// for pivot identifier
+							var isPivot = false;
+							if (saved_waiting_avg[z]['identifier'].indexOf("^") >= 0) {
+								if (saved_waiting_avg[z]['identifier'].substr(0, saved_waiting_avg[z]['identifier'].indexOf("^")) == row['identifier'].substr(0, saved_waiting_avg[z]['identifier'].indexOf("^"))) {
+									isPivot = true;
+								}
+							}
+							
+							if (isPivot || saved_waiting_avg[z]['identifier'] == row['identifier']) {
+								saved_waiting_avg[z]['value'] += (isNaN(text) ? 0 : text*1);
+								saved_waiting_avg[z]['count'] ++;
+							}
+						}
+						
+						for (z=0; z<saved_waiting_max.length; z++) {
+							
+							// for pivot identifier
+							var isPivot = false;
+							if (saved_waiting_max[z]['identifier'].indexOf("^") >= 0) {
+								if (saved_waiting_max[z]['identifier'].substr(0, saved_waiting_max[z]['identifier'].indexOf("^")) == row['identifier'].substr(0, saved_waiting_max[z]['identifier'].indexOf("^"))) {
+									isPivot = true;
+								}
+							}
+							
+							if (isPivot || saved_waiting_max[z]['identifier'] == row['identifier']) {
+								saved_waiting_max[z]['value'] = Math.max(saved_waiting_max[z]['value']*1, (isNaN(text) ? 0 : text*1));
+							}
+						}
+						
+						for (z=0; z<saved_waiting_min.length; z++) {
+							
+							// for pivot identifier
+							var isPivot = false;
+							if (saved_waiting_min[z]['identifier'].indexOf("^") >= 0) {
+								if (saved_waiting_min[z]['identifier'].substr(0, saved_waiting_min[z]['identifier'].indexOf("^")) == row['identifier'].substr(0, saved_waiting_min[z]['identifier'].indexOf("^"))) {
+									isPivot = true;
+								}
+							}
+							
+							if (isPivot || saved_waiting_min[z]['identifier'] == row['identifier']) {
+								saved_waiting_min[z]['value'] = Math.min(saved_waiting_min[z]['value']*1, (isNaN(text) ? 0 : text*1));
+							}
+						}
+					}
+				}
+				if (typeof row['textarea'] != "undefined") {
+					textarea_height = row['textarea']*1;
+				}
+				if (typeof row['maxlength'] != "undefined") {
+					max_length = row['maxlength']*1;
+				}
+				
+				// collapse agg field
+				if (typeof row['collapse_agg_field'] != "undefined") {
+					
+					classes.push("collapse_agg_row");
+					var tempRowIdentifier = row['identifier'];
+					
+					// for pivot identifier
+					for (var identifier in collapse_agg) {
+						if (identifier.indexOf("^") >= 0) {
+							if (identifier.substr(0, identifier.indexOf("^")) == tempRowIdentifier.substr(0, identifier.indexOf("^"))) {
+								tempRowIdentifier = identifier;
+							}
+						}
+					}
+					
+					if (typeof collapse_agg[tempRowIdentifier] != "undefined") {
+						for (var z=0; z<collapse_agg[tempRowIdentifier].length; z++) {
+							var value = collapse_agg[tempRowIdentifier][z];
+							var identifierId = tempRowIdentifier.replace(/^[^a-z]+|[^\w:.-]+/gi, "");
+							
+							if (value == "center") {
+								align = "center";
+							} else if (value == "right") {
+								align = "right";
+							} else if (value == "sum" || value.substr(0,3) == "sum") {
+								id = "waiting-sum-" + identifierId + "-" + i;
+								var digit = value.substr(3)*1;
+								
+								// search for identifier (if exists)
+								var found = -1;
+								for (x=0; x<saved_waiting_sum.length; x++) {
+									if (saved_waiting_sum[x]['identifier'] == tempRowIdentifier) {
+										found = x;
+										break;
+									}
+								}
+
+								// if found, save and recycle
+								if (found >= 0) {
+									var temp = {};
+									temp['id'] = saved_waiting_sum[found]['id'];
+									temp['identifier'] = tempRowIdentifier;
+									temp['value'] = saved_waiting_sum[found]['value'];
+									temp['digit'] = saved_waiting_sum[found]['digit'];
+									
+									// save to ready_to_sum
+									var search = -1;
+									for (x=0; x<saved_ready_to_sum.length; x++) {
+										if (saved_ready_to_sum[x]['id'] == temp['id']) {
+											search = x;
+											break;
+										}
+									}
+									if (search == -1) {
+										saved_ready_to_sum.push(temp);
+									} else {
+										saved_ready_to_sum[search]['value'] = temp['value'];
+									}
+									
+									saved_waiting_sum[found]['id'] = id;
+									saved_waiting_sum[found]['value'] = 0;
+									saved_waiting_sum[found]['digit'] = digit;
+								} else {
+									var temp = {};
+									temp['id'] = id;
+									temp['identifier'] = tempRowIdentifier;
+									temp['value'] = 0;
+									temp['digit'] = digit;
+									saved_waiting_sum.push(temp);
+								}
+								align = "right";
+							} else if (value == "avg" || value.substr(0,3) == "avg") {
+								id = "waiting-avg-" + identifierId + "-" + i;
+								var digit = value.substr(3)*1;
+								
+								// search for identifier (if exists)
+								var found = -1;
+								for (x=0; x<saved_waiting_avg.length; x++) {
+									if (saved_waiting_avg[x]['identifier'] == tempRowIdentifier) {
+										found = x;
+										break;
+									}
+								}
+
+								// if found, save and recycle
+								if (found >= 0) {
+									var temp = {};
+									temp['id'] = saved_waiting_avg[found]['id'];
+									temp['identifier'] = tempRowIdentifier;
+									temp['value'] = saved_waiting_avg[found]['value'];
+									temp['count'] = saved_waiting_avg[found]['count'];
+									temp['digit'] = saved_waiting_avg[found]['digit'];
+									
+									// save to ready_to_avg
+									var search = -1;
+									for (x=0; x<saved_ready_to_avg.length; x++) {
+										if (saved_ready_to_avg[x]['id'] == temp['id']) {
+											search = x;
+											break;
+										}
+									}
+									if (search == -1) {
+										saved_ready_to_avg.push(temp);
+									} else {
+										saved_ready_to_avg[search]['value'] = temp['value'];
+										saved_ready_to_avg[search]['count'] = temp['count'];
+									}
+									
+									saved_waiting_avg[found]['id'] = id;
+									saved_waiting_avg[found]['value'] = 0;
+									saved_waiting_avg[found]['count'] = 0;
+									saved_waiting_avg[found]['digit'] = digit;
+								} else {
+									var temp = {};
+									temp['id'] = id;
+									temp['identifier'] = tempRowIdentifier;
+									temp['value'] = 0;
+									temp['count'] = 0;
+									temp['digit'] = digit;
+									saved_waiting_avg.push(temp);
+								}
+								align = "right";
+							} else if (value == "max" || value.substr(0,3) == "max") {
+								id = "waiting-max-" + identifierId + "-" + i;
+								var digit = value.substr(3)*1;
+								
+								// search for identifier (if exists)
+								var found = -1;
+								for (x=0; x<saved_waiting_max.length; x++) {
+									if (saved_waiting_max[x]['identifier'] == tempRowIdentifier) {
+										found = x;
+										break;
+									}
+								}
+
+								// if found, save and recycle
+								if (found >= 0) {
+									var temp = {};
+									temp['id'] = saved_waiting_max[found]['id'];
+									temp['identifier'] = tempRowIdentifier;
+									temp['value'] = saved_waiting_max[found]['value'];
+									temp['digit'] = saved_waiting_max[found]['digit'];
+									
+									// save to ready_to_max
+									var search = -1;
+									for (x=0; x<saved_ready_to_max.length; x++) {
+										if (saved_ready_to_max[x]['id'] == temp['id']) {
+											search = x;
+											break;
+										}
+									}
+									if (search == -1) {
+										saved_ready_to_max.push(temp);
+									} else {
+										saved_ready_to_max[search]['value'] = temp['value'];
+									}
+									
+									saved_waiting_max[found]['id'] = id;
+									saved_waiting_max[found]['value'] = -999999999999;
+									saved_waiting_max[found]['digit'] = digit;
+								} else {
+									var temp = {};
+									temp['id'] = id;
+									temp['identifier'] = tempRowIdentifier;
+									temp['value'] = -999999999999;
+									temp['digit'] = digit;
+									saved_waiting_max.push(temp);
+								}
+								align = "right";
+							} else if (value == "min" || value.substr(0,3) == "min") {
+								id = "waiting-min-" + identifierId + "-" + i;
+								var digit = value.substr(3)*1;
+								
+								// search for identifier (if exists)
+								var found = -1;
+								for (x=0; x<saved_waiting_min.length; x++) {
+									if (saved_waiting_min[x]['identifier'] == tempRowIdentifier) {
+										found = x;
+										break;
+									}
+								}
+
+								// if found, save and recycle
+								if (found >= 0) {
+									var temp = {};
+									temp['id'] = saved_waiting_min[found]['id'];
+									temp['identifier'] = tempRowIdentifier;
+									temp['value'] = saved_waiting_min[found]['value'];
+									temp['digit'] = saved_waiting_min[found]['digit'];
+									
+									// save to ready_to_min
+									var search = -1;
+									for (x=0; x<saved_ready_to_min.length; x++) {
+										if (saved_ready_to_min[x]['id'] == temp['id']) {
+											search = x;
+											break;
+										}
+									}
+									if (search == -1) {
+										saved_ready_to_min.push(temp);
+									} else {
+										saved_ready_to_min[search]['value'] = temp['value'];
+									}
+									
+									saved_waiting_min[found]['id'] = id;
+									saved_waiting_min[found]['value'] = 999999999999;
+									saved_waiting_min[found]['digit'] = digit;
+								} else {
+									var temp = {};
+									temp['id'] = id;
+									temp['identifier'] = tempRowIdentifier;
+									temp['value'] = 999999999999;
+									temp['digit'] = digit;
+									saved_waiting_min.push(temp);
+								}
+								align = "right";
+							} else if (value == "bold") {
+								font_weight = "bold";
+							} else if (value == "italic") {
+								font_style = "italic";
+							} else if (value == "underline") {
+								text_decoration = "underline";
+							} else if (value.substr(0,5) == "func>") {
+								id = "waiting-func-" + identifierId + "-" + i;
+								var temp = {};
+								temp['i'] = i;
+								temp['id'] = id;
+								temp['identifier'] = tempRowIdentifier;
+								temp['func'] = value.substr(5);
+								saved_waiting_func.push(temp);
+							} else {
+								text = value;
+							}
+						}
+					}
+					
+				// group collapse agg field
+				} else if (typeof row['group_collapse_agg_field'] != "undefined") {
+					
+					classes.push("group_collapse_agg_row");
+					var tempRowIdentifier = row['identifier'];
+					
+					// for pivot identifier
+					for (var identifier in group_collapse_agg) {
+						if (identifier.indexOf("^") >= 0) {
+							if (identifier.substr(0, identifier.indexOf("^")) == tempRowIdentifier.substr(0, identifier.indexOf("^"))) {
+								tempRowIdentifier = identifier;
+							}
+						}
+					}
+					
+					if (typeof group_collapse_agg[tempRowIdentifier] != "undefined") {
+						for (var z=0; z<group_collapse_agg[tempRowIdentifier].length; z++) {
+							var value = group_collapse_agg[tempRowIdentifier][z];
+							var identifierId = tempRowIdentifier.replace(/^[^a-z]+|[^\w:.-]+/gi, "");
+							
+							if (value == "center") {
+								align = "center";
+							} else if (value == "right") {
+								align = "right";
+							} else if (value == "sum" || value.substr(0,3) == "sum") {
+								id = "waiting-sum-group-collapse-" + identifierId + "-" + i;
+								var digit = value.substr(3)*1;
+								
+								var temp = {};
+								temp['id'] = id;
+								temp['identifier'] = tempRowIdentifier;
+								temp['value'] = 0;
+								temp['digit'] = digit;
+								temp['type'] = "sum";
+								saved_group_collapse.push(temp);
+								align = "right";
+							} else if (value == "avg" || value.substr(0,3) == "avg") {
+								id = "waiting-avg-group-collapse-" + identifierId + "-" + i;
+								var digit = value.substr(3)*1;
+								
+								var temp = {};
+								temp['id'] = id;
+								temp['identifier'] = tempRowIdentifier;
+								temp['value'] = 0;
+								temp['count'] = 0;
+								temp['digit'] = digit;
+								temp['type'] = "avg";
+								saved_group_collapse.push(temp);
+								align = "right";
+							} else if (value == "max" || value.substr(0,3) == "max") {
+								id = "waiting-max-group-collapse-" + identifierId + "-" + i;
+								var digit = value.substr(3)*1;
+								
+								var temp = {};
+								temp['id'] = id;
+								temp['identifier'] = tempRowIdentifier;
+								temp['value'] = -999999999999;
+								temp['digit'] = digit;
+								temp['type'] = "max";
+								saved_group_collapse.push(temp);
+								align = "right";
+							} else if (value == "min" || value.substr(0,3) == "min") {
+								id = "waiting-min-group-collapse-" + identifierId + "-" + i;
+								var digit = value.substr(3)*1;
+								
+								var temp = {};
+								temp['id'] = id;
+								temp['identifier'] = tempRowIdentifier;
+								temp['value'] = 999999999999;
+								temp['digit'] = digit;
+								temp['type'] = "min";
+								saved_group_collapse.push(temp);
+								align = "right";
+							} else if (value == "bold") {
+								font_weight = "bold";
+							} else if (value == "italic") {
+								font_style = "italic";
+							} else if (value == "underline") {
+								text_decoration = "underline";
+							} else if (value.substr(0,5) == "func>") {
+								id = "waiting-func-" + identifierId + "-" + i;
+								var temp = {};
+								temp['i'] = i;
+								temp['id'] = id;
+								temp['identifier'] = tempRowIdentifier;
+								temp['func'] = value.substr(5);
+								saved_waiting_func_group.push(temp);
+							} else {
+								text = value;
+							}
+						}
+					}
+				
+				// group agg field
+				} else if (typeof row['group_agg_field'] != "undefined") {
+					
+					classes.push("group_agg_row");
+					classes.push(row['group_agg_field']);
+					var group_identifier = row['group_agg_field'].split("-")[1];
+					if (group_agg_fields !== null) {
+						if (typeof group_agg_fields[group_identifier] != "undefined") {
+							for (var z=0; z<group_agg_fields[group_identifier].length; z++) {
+								var identifier = group_agg_fields[group_identifier][z].split("=")[0];
+								
+								// for pivot identifier
+								var isPivot = false;
+								if (identifier.indexOf("^") >= 0) {
+									if (identifier.substr(0, identifier.indexOf("^")) == row['identifier'].substr(0, identifier.indexOf("^"))) {
+										isPivot = true;
+									}
+								}
+								
+								if (isPivot || identifier == row['identifier']) {
+									var value = group_agg_fields[group_identifier][z].split("=")[1];
+									if (value == "center") {
+										align = "center";
+									} else if (value == "right") {
+										align = "right";
+									} else if (value == "sum" || value.substr(0,3) == "sum") {
+										if (typeof saved_sum_group_by[group_identifier][row['identifier']] != "undefined") {
+											var digit = value.substr(3)*1;
+											text = formatCur(saved_sum_group_by[group_identifier][row['identifier']],digit);
+											align = "right";
+											
+											saved_group_by_value[i][row['identifier']] = saved_sum_group_by[group_identifier][row['identifier']];
+											saved_sum_group_by[group_identifier][row['identifier']] = 0;
+										}
+									} else if (value == "max") {
+										if (typeof saved_max_group_by[group_identifier][row['identifier']] != "undefined") {
+											text = formatCur(saved_max_group_by[group_identifier][row['identifier']]);
+											align = "right";
+											
+											saved_group_by_value[i][row['identifier']] = saved_max_group_by[group_identifier][row['identifier']];
+											saved_max_group_by[group_identifier][row['identifier']] = 0;
+										}
+									} else if (value == "avg" || value.substr(0,3) == "avg") {
+										if (typeof saved_avg_group_by[group_identifier][row['identifier']] != "undefined") {
+											var digit = value.substr(3)*1;
+											text = formatCur(saved_avg_group_by[group_identifier][row['identifier']]['sum'] / Math.max(saved_avg_group_by[group_identifier][row['identifier']]['count'],1), digit);
+											align = "right";
+											
+											saved_group_by_value[i][row['identifier']] = Math.round(saved_avg_group_by[group_identifier][row['identifier']]['sum'] / Math.max(saved_avg_group_by[group_identifier][row['identifier']]['count'],1), digit);
+											saved_avg_group_by[group_identifier][row['identifier']] = {"sum": 0, "count": 0};
+										}
+									} else if (value == "bold") {
+										font_weight = "bold";
+									} else if (value == "italic") {
+										font_style = "italic";
+									} else if (value == "underline") {
+										text_decoration = "underline";
+									} else if (value.substr(0,5) == "func>") {
+										var equation = value.substr(5);
+										for (var saved_key in saved_group_by_value[i]) {
+											var sanitizeRegex = saved_key.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+											var re = new RegExp("@" + sanitizeRegex + "@", 'g');
+											equation = equation.replace(re, saved_group_by_value[i][saved_key]);
+										}
+										try {
+											text = eval(equation) + "";
+										} catch(e) {}
+									} else if (value == "formatcur" || value.substr(0,9) == "formatcur") {
+										if (text.trim().length > 0) {
+											var digit = value.substr(9)*1;
+											text = formatCur(text,digit);
+											align = "right";
+										}
+									} else {
+										text = value;
+									}
+								}
+							}
+						}
+					}
+				} else {
+					
+					// check distinct field
+					if (typeof last_distinct_field[row['identifier']] != "undefined") {
+						if (last_distinct_field[row['identifier']] != "" && last_distinct_field[row['identifier']] == text) {
+							text = "";
+						} else {
+							last_distinct_field[row['identifier']] = text;
+						}
+					}
+					
+					// condition
+					if (typeof row['condition'] != "undefined") {
+						for (var z=0; z<row['condition'].length; z++) {
+							var cond = row['condition'][z];
+							if (typeof cond['if'] != "undefined" && typeof cond["then"] != "undefined") {
+								cond['if'] = cond['if'].replace(new RegExp("@value@", 'g'), text);
+								try {
+									if (eval(cond['if'])) {
+										var css = cond['then'].split(";");
+										for (var x=0; x<css.length; x++) {
+											var temp = css[x].split("=");
+											condition[temp[0]] = temp[1];
+										}
+									}
+								} catch(e) {}
+							}
+						}
+					}
+					
+					// column format
+					var formats = column_formats.split(";");
+					for (var z=0; z<formats.length; z++) {
+						var identifier = formats[z].split("=")[0];
+						
+						// for pivot identifier
+						var isPivot = false;
+						if (identifier.indexOf("^") >= 0) {
+							if (identifier.substr(0, identifier.indexOf("^")) == row['identifier'].substr(0, identifier.indexOf("^"))) {
+								isPivot = true;
+							}
+						}
+						
+						if (isPivot || identifier == row['identifier']) {
+							var value = formats[z].split("=")[1];
+							if (value == "center") {
+								align = "center";
+							} else if (value == "right") {
+								align = "right";
+							} else if (value == "formatcur" || value.substr(0,9) == "formatcur") {
+								if (text.trim().length > 0) {
+									var digit = value.substr(9)*1;
+									text = formatCur(text,digit);
+									align = "right";
+								}
+							} else if (value == "formatdate") {
+								if (text.trim().length > 0) {
+									text = showDate(text);
+									align = "center";
+								}
+							} else if (value == "formattime") {
+								if (text.trim().length > 0) {
+									text = showTime(text);
+									align = "center";
+								}
+							} else if (value == "formatdatetime") {
+								if (text.trim().length > 0) {
+									text = showDate(text.substr(0,8)) + " " + showTime(text.substr(8,6));
+									align = "center";
+								}
+							} else if (value == "formatmonth") {
+								if (text.trim().length > 0) {
+									text = getMonthsName(text.substr(4,2)*1, false) + " " + text.substr(0,4);
+									align = "left";
+								}
+							} else if (value == "bold") {
+								font_weight = "bold";
+							} else if (value == "italic") {
+								font_style = "italic";
+							} else if (value == "underline") {
+								text_decoration = "underline";
+							} else if (value == "link" || value == "linkleft" || value == "linkright") {
+								isLink = value == "linkleft" ? "linkleft" : "linkright";
+							} else if (value == "abslink" || value == "abslinkleft" || value == "abslinkright") {
+								isLink = value == "abslinkleft" ? "abslinkleft" : "abslinkright";
+							} else if (value == "propercase") {
+								text = properCase(text);
+							}
+						}
+					}
+				}
+				
+				// force css
+				if ((textarea_height > 0 || isLink) && typeof row['collapse_agg_field'] == "undefined" && typeof row['group_collapse_agg_field'] == "undefined" && typeof row['group_agg_field'] == "undefined") {
+					align = "center";
+				}
+				
+				content += "<td align='" + align + "' id='" + id + "' class='report_data " + classes.join(" ") + "'";
+				content += " style='font-weight:" + font_weight + ";font-style:" + font_style + ";text-decoration:" + text_decoration + ";";
+				// condition
+				if (Object.mySize(condition) > 0) {
+					for (var key in condition) {
+						content += key + ":" + condition[key] + "!important;";
+					}
+				}
+				if (i == 0) {
+					var width = typeof row['width'] != "undefined" ? row['width'] : 150;
+					content += "width:" + width + "px'";
+				}
+				content += "'><div style='height:" + (classes.indexOf("collapse_agg_row") >= 0 || classes.indexOf("group_collapse_agg_row") >= 0 || classes.indexOf("group_agg_row") >= 0 ? (20 / body_scale) : data_height) + "px;overflow:hidden'>";
+				if (max_length > 0 && text.length > max_length) text = text.substr(0, max_length) + "&#8230;";
+				
+				if ((textarea_height > 0 || isLink) && typeof row['collapse_agg_field'] == "undefined" && typeof row['group_collapse_agg_field'] == "undefined" && typeof row['group_agg_field'] == "undefined") {
+					if (isLink) {
+						if (text.indexOf("(link:") >= 0) {
+							var url_text = text.substring(0, text.indexOf("(link:"));
+							var url_link = text.substring(text.indexOf("(link:") + 6, text.indexOf(")", text.indexOf("(link:") + 6));
+							content += "<a class='a_report " + isLink + "' href='" + (isLink.substr(0, 3) == "abs" ? url_link : ".." + url_link) + "' target='_blank'>" + url_text + "</a>";
+						} else {
+							content += text;
+						}
+					} else if (textarea_height > 0) {
+						content += "<textarea readonly style='width:98%;height:" + textarea_height + "px;resize:none;font-weight:" + font_weight + ";font-style:" + font_style + ";text-decoration:" + text_decoration + "'>" + text + "</textarea>";
+					}
+				} else {
+					content += text;
+				}
+				content += "</div></td>";
+			}
+			content +=			"</tr>";
+		}
+	} else {
+		content += "<tr><td colspan=999 align='center'>TIDAK ADA DATA</td></tr>";
+	}
+	content +=			"</table>";
+	content +=		"</div>";
+	content += 	"</td>";
+	content += "</tr>";
+	
+	$('#tblReport').html(content);
+	
+	// put collapse agg field (sum)
+	for (var z=0; z<saved_waiting_sum.length; z++) {
+		var temp = {};
+		temp['id'] = saved_waiting_sum[z]['id'];
+		temp['identifier'] = saved_waiting_sum[z]['identifier'];
+		temp['value'] = saved_waiting_sum[z]['value'];
+		temp['digit'] = saved_waiting_sum[z]['digit'];
+		
+		// save to ready_to_sum
+		var search = -1;
+		for (x=0; x<saved_ready_to_sum.length; x++) {
+			if (saved_ready_to_sum[x]['id'] == temp['id']) {
+				search = x;
+				break;
+			}
+		}
+		if (search == -1) {
+			saved_ready_to_sum.push(temp);
+		} else {
+			saved_ready_to_sum[search]['value'] = temp['value'];
+		}
+	}
+	
+	for (var z=0; z<saved_ready_to_sum.length; z++) {
+		$('#' + saved_ready_to_sum[z]['id']).html(formatCur(saved_ready_to_sum[z]['value'],saved_ready_to_sum[z]['digit']));
+		
+		// for group collapse
+		for (var x=0; x<saved_group_collapse.length; x++) {
+			if (saved_ready_to_sum[z]['identifier'] == saved_group_collapse[x]['identifier'] && saved_group_collapse[x]['type'] == "sum") {
+				saved_group_collapse[x]['value'] += saved_ready_to_sum[z]['value'];
+				break;
+			}
+		}
+	}
+	
+	// put collapse agg field (avg)
+	for (var z=0; z<saved_waiting_avg.length; z++) {
+		var temp = {};
+		temp['id'] = saved_waiting_avg[z]['id'];
+		temp['identifier'] = saved_waiting_avg[z]['identifier'];
+		temp['value'] = saved_waiting_avg[z]['value'];
+		temp['count'] = saved_waiting_avg[z]['count'];
+		temp['digit'] = saved_waiting_avg[z]['digit'];
+		
+		// save to ready_to_avg
+		var search = -1;
+		for (x=0; x<saved_ready_to_avg.length; x++) {
+			if (saved_ready_to_avg[x]['id'] == temp['id']) {
+				search = x;
+				break;
+			}
+		}
+		if (search == -1) {
+			saved_ready_to_avg.push(temp);
+		} else {
+			saved_ready_to_avg[search]['value'] = temp['value'];
+			saved_ready_to_avg[search]['count'] = temp['count'];
+		}
+	}
+	
+	for (var z=0; z<saved_ready_to_avg.length; z++) {
+		$('#' + saved_ready_to_avg[z]['id']).html(formatCur(saved_ready_to_avg[z]['value'] / Math.max(saved_ready_to_avg[z]['count'],1), saved_ready_to_avg[z]['digit']));
+		
+		// for group collapse
+		for (var x=0; x<saved_group_collapse.length; x++) {
+			if (saved_ready_to_avg[z]['identifier'] == saved_group_collapse[x]['identifier'] && saved_group_collapse[x]['type'] == "avg") {
+				saved_group_collapse[x]['value'] += Math.round(saved_ready_to_avg[z]['value'] / Math.max(saved_ready_to_avg[z]['count'],1), saved_ready_to_avg[z]['digit']);
+				saved_group_collapse[x]['count'] ++;
+				break;
+			}
+		}
+	}
+	
+	// put collapse agg field (max)
+	for (var z=0; z<saved_waiting_max.length; z++) {
+		var temp = {};
+		temp['id'] = saved_waiting_max[z]['id'];
+		temp['identifier'] = saved_waiting_max[z]['identifier'];
+		temp['value'] = saved_waiting_max[z]['value'];
+		temp['digit'] = saved_waiting_max[z]['digit'];
+		
+		// save to ready_to_max
+		var search = -1;
+		for (x=0; x<saved_ready_to_max.length; x++) {
+			if (saved_ready_to_max[x]['id'] == temp['id']) {
+				search = x;
+				break;
+			}
+		}
+		if (search == -1) {
+			saved_ready_to_max.push(temp);
+		} else {
+			saved_ready_to_max[search]['value'] = temp['value'];
+		}
+	}
+	
+	for (var z=0; z<saved_ready_to_max.length; z++) {
+		$('#' + saved_ready_to_max[z]['id']).html(formatCur(saved_ready_to_max[z]['value'],saved_ready_to_max[z]['digit']));
+		
+		// for group collapse
+		for (var x=0; x<saved_group_collapse.length; x++) {
+			if (saved_ready_to_max[z]['identifier'] == saved_group_collapse[x]['identifier'] && saved_group_collapse[x]['type'] == "max") {
+				saved_group_collapse[x]['value'] = Math.max(saved_group_collapse[x]['value'], saved_ready_to_max[z]['value']);
+				break;
+			}
+		}
+	}
+	
+	// put collapse agg field (min)
+	for (var z=0; z<saved_waiting_min.length; z++) {
+		var temp = {};
+		temp['id'] = saved_waiting_min[z]['id'];
+		temp['identifier'] = saved_waiting_min[z]['identifier'];
+		temp['value'] = saved_waiting_min[z]['value'];
+		temp['digit'] = saved_waiting_min[z]['digit'];
+		
+		// save to ready_to_min
+		var search = -1;
+		for (x=0; x<saved_ready_to_min.length; x++) {
+			if (saved_ready_to_min[x]['id'] == temp['id']) {
+				search = x;
+				break;
+			}
+		}
+		if (search == -1) {
+			saved_ready_to_min.push(temp);
+		} else {
+			saved_ready_to_min[search]['value'] = temp['value'];
+		}
+	}
+	
+	for (var z=0; z<saved_ready_to_min.length; z++) {
+		$('#' + saved_ready_to_min[z]['id']).html(formatCur(saved_ready_to_min[z]['value'],saved_ready_to_min[z]['digit']));
+		
+		// for group collapse
+		for (var x=0; x<saved_group_collapse.length; x++) {
+			if (saved_ready_to_min[z]['identifier'] == saved_group_collapse[x]['identifier'] && saved_group_collapse[x]['type'] == "min") {
+				saved_group_collapse[x]['value'] = Math.min(saved_group_collapse[x]['value'], saved_ready_to_min[z]['value']);
+				break;
+			}
+		}
+	}
+	
+	// saved_group_collapse 
+	for (var z=0; z<saved_group_collapse.length; z++) {
+		if (saved_group_collapse[z]['type'] == 'sum') {
+			$('#' + saved_group_collapse[z]['id']).html(formatCur(saved_group_collapse[z]['value'], saved_group_collapse[z]['digit']));
+		} else if (saved_group_collapse[z]['type'] == 'avg') {
+			$('#' + saved_group_collapse[z]['id']).html(formatCur(saved_group_collapse[z]['value'] / Math.max(saved_group_collapse[z]['count'],1), saved_group_collapse[z]['digit']));
+		} else if (saved_group_collapse[z]['type'] == 'max') {
+			$('#' + saved_group_collapse[z]['id']).html(formatCur(saved_group_collapse[z]['value'], saved_group_collapse[z]['digit']));
+		} else if (saved_group_collapse[z]['type'] == 'min') {
+			$('#' + saved_group_collapse[z]['id']).html(formatCur(saved_group_collapse[z]['value'], saved_group_collapse[z]['digit']));
+		}
+	}
+	
+	for (var z=0; z<saved_waiting_func.length; z++) {
+		var equation = saved_waiting_func[z]['func'];
+		for (var y=0; y<saved_ready_to_sum.length; y++) {
+			var suffix = saved_ready_to_sum[y]['id'].substr(saved_ready_to_sum[y]['id'].lastIndexOf("-"));
+			if (saved_ready_to_sum[y]['id'].substr(0, 12) == "waiting-sum-" && suffix == "-" + saved_waiting_func[z]['i']) {
+				var sanitizeRegex = saved_ready_to_sum[y]['identifier'].replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+				var re = new RegExp("@" + sanitizeRegex + "@", 'g');
+				equation = equation.replace(re, saved_ready_to_sum[y]['value']);
+			}
+		}
+		for (var y=0; y<saved_ready_to_avg.length; y++) {
+			var suffix = saved_ready_to_avg[y]['id'].substr(saved_ready_to_avg[y]['id'].lastIndexOf("-"));
+			if (saved_ready_to_avg[y]['id'].substr(0, 12) == "waiting-avg-" && suffix == "-" + saved_waiting_func[z]['i']) {
+				var sanitizeRegex = saved_ready_to_avg[y]['identifier'].replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+				var re = new RegExp("@" + sanitizeRegex + "@", 'g');
+				equation = equation.replace(re, saved_ready_to_avg[y]['value'] / Math.max(saved_ready_to_avg[y]['count'],1));
+			}
+		}
+		for (var y=0; y<saved_ready_to_max.length; y++) {
+			var suffix = saved_ready_to_max[y]['id'].substr(saved_ready_to_max[y]['id'].lastIndexOf("-"));
+			if (saved_ready_to_max[y]['id'].substr(0, 12) == "waiting-max-" && suffix == "-" + saved_waiting_func[z]['i']) {
+				var sanitizeRegex = saved_ready_to_max[y]['identifier'].replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+				var re = new RegExp("@" + sanitizeRegex + "@", 'g');
+				equation = equation.replace(re, saved_ready_to_max[y]['value']);
+			}
+		}
+		for (var y=0; y<saved_ready_to_min.length; y++) {
+			var suffix = saved_ready_to_min[y]['id'].substr(saved_ready_to_min[y]['id'].lastIndexOf("-"));
+			if (saved_ready_to_min[y]['id'].substr(0, 12) == "waiting-min-" && suffix == "-" + saved_waiting_func[z]['i']) {
+				var sanitizeRegex = saved_ready_to_min[y]['identifier'].replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+				var re = new RegExp("@" + sanitizeRegex + "@", 'g');
+				equation = equation.replace(re, saved_ready_to_min[y]['value']);
+			}
+		}
+		text = "";
+		try {
+			text = eval(equation) + "";
+		} catch(e) {}
+		$('#' + saved_waiting_func[z]['id'] + ">div").html(text);
+	}
+	
+	for (var z=0; z<saved_waiting_func_group.length; z++) {
+		var equation = saved_waiting_func_group[z]['func'];
+		for (var y=0; y<saved_group_collapse.length; y++) {
+			var suffix = saved_group_collapse[y]['id'].substr(saved_group_collapse[y]['id'].lastIndexOf("-"));
+			if (saved_group_collapse[y]['id'].substr(0, 27) == "waiting-sum-group-collapse-" && suffix == "-" + saved_waiting_func_group[z]['i']) {
+				var sanitizeRegex = saved_group_collapse[y]['identifier'].replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+				var re = new RegExp("@" + sanitizeRegex + "@", 'g');
+				equation = equation.replace(re, saved_group_collapse[y]['value']);
+			}
+		}
+		for (var y=0; y<saved_group_collapse.length; y++) {
+			var suffix = saved_group_collapse[y]['id'].substr(saved_group_collapse[y]['id'].lastIndexOf("-"));
+			if (saved_group_collapse[y]['id'].substr(0, 27) == "waiting-avg-group-collapse-" && suffix == "-" + saved_waiting_func_group[z]['i']) {
+				var sanitizeRegex = saved_group_collapse[y]['identifier'].replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+				var re = new RegExp("@" + sanitizeRegex + "@", 'g');
+				equation = equation.replace(re, saved_group_collapse[y]['value'] / Math.max(saved_group_collapse[y]['count'],1));
+			}
+		}
+		for (var y=0; y<saved_group_collapse.length; y++) {
+			var suffix = saved_group_collapse[y]['id'].substr(saved_group_collapse[y]['id'].lastIndexOf("-"));
+			if (saved_group_collapse[y]['id'].substr(0, 27) == "waiting-max-group-collapse-" && suffix == "-" + saved_waiting_func_group[z]['i']) {
+				var sanitizeRegex = saved_group_collapse[y]['identifier'].replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+				var re = new RegExp("@" + sanitizeRegex + "@", 'g');
+				equation = equation.replace(re, saved_group_collapse[y]['value']);
+			}
+		}
+		for (var y=0; y<saved_group_collapse.length; y++) {
+			var suffix = saved_group_collapse[y]['id'].substr(saved_group_collapse[y]['id'].lastIndexOf("-"));
+			if (saved_group_collapse[y]['id'].substr(0, 27) == "waiting-min-group-collapse-" && suffix == "-" + saved_waiting_func_group[z]['i']) {
+				var sanitizeRegex = saved_group_collapse[y]['identifier'].replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+				var re = new RegExp("@" + sanitizeRegex + "@", 'g');
+				equation = equation.replace(re, saved_group_collapse[y]['value']);
+			}
+		}
+		text = "";
+		try {
+			text = eval(equation) + "";
+		} catch(e) {}
+		$('#' + saved_waiting_func_group[z]['id'] + ">div").html(text);
+	}
+	
+	// for live preview
+	$(".linkright, .abslinkright").livePreview({
+		viewWidth: 210,
+		viewHeight: 140,
+		position: "right",
+	});
+	$(".linkleft, .abslinkleft").livePreview({
+		viewWidth: 210,
+		viewHeight: 140,
+		position: "left",
+	});
+	
+	if (!_isDashboard) {
+		$('.a_report').click(function() {
+			$(this).trigger("mouseleave").trigger("mouseenter");
+			return false
+		});
+		$('#tblReport').find('.scrollable').scroll(function(event) {
+			$('.a_report').trigger("mouseleave");
+		});
+	}
+
+	loadVisualMainReport('#tblReport', sort, filter);
+	
+	// set div setting
+	$('#selectPagesize').val(pagesize);
+	var content = "";
+	for (var i=1; i<=max_page; i++) {
+		content += "<option value='" + i + "' " + (i == page ? "selected" : "") + ">HAL " + i + " DARI " + max_page + "</option>";
+	}
+	$('#selectPage').html(content);
+	var countString = "MENAMPILKAN " + ((page-1)*pagesize+1) + "-" + Math.min(data_count,page*pagesize) + " DARI " + data_count + " DATA";
+	if (data_count == 0) countString = "0 DATA DITEMUKAN";
+	$('#divCount').html(countString);
+	
+	// div setting
+	if ($('#tblReport').html().trim() != "") {
+		var width = Math.max($('#tblReport').width(), 760);
+		$('#divSetting').width(width).show();
+	}
+}
+
+function sortReport(id, mode) {
+	sort = id + " " + mode;
+	getDataReport();
+}
+
+function filterReport(id, content) {
+	filter[id] = encodeURIComponent(addslashes(content));
+	getDataReport();
+}

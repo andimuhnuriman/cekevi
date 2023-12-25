@@ -1,0 +1,35 @@
+/* Indonesian initialisation for the jQuery UI date picker plugin. */
+/* Written by Deden Fathurahman (dedenf@gmail.com). */
+( function( factory ) {
+	if ( typeof define === "function" && define.amd ) {
+
+		// AMD. Register as an anonymous module.
+		define( [ "../widgets/datepicker" ], factory );
+	} else {
+
+		// Browser globals
+		factory( jQuery.datepicker );
+	}
+}( function( datepicker ) {
+
+datepicker.regional.id = {
+	closeText: "TUTUP",
+	prevText: "MUNDUR",
+	nextText: "MAJU",
+	currentText: "HARI INI",
+	monthNames: [ "JANUARI","FEBRUARI","MARET","APRIL","MEI","JUNI","JULI","AGUSTUS","SEPTEMBER","OKTOBER","NOVEMBER","DESEMBER" ],
+	monthNamesShort: [ "JAN","FEB","MAR","APR","MEI","JUN","JUL","AGT","SEP","OKT","NOV","DES" ],
+	dayNames: [ "MINGGU","SENIN","SELASA","RABU","KAMIS","JUMAT","SABTU" ],
+	dayNamesShort: [ "MIN","SEN","SEL","RAB","KAM","JUM","SAB" ],
+	dayNamesMin: [ "MG","SN","SL","RB","KM","JM","SB" ],
+	weekHeader: "MG",
+	dateFormat: "dd/mm/yy",
+	firstDay: 0,
+	isRTL: false,
+	showMonthAfterYear: false,
+	yearSuffix: "" };
+datepicker.setDefaults( datepicker.regional.id );
+
+return datepicker.regional.id;
+
+} ) );
